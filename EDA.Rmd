@@ -1,0 +1,106 @@
+---
+title: "Brazillian Ecommerce - EDA"
+author: "Evan Canfield"
+date: "3/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import
+## Libraries
+```{r}
+if (!require(pacman)) {install.packages('pacman')} 
+p_load(
+    janitor
+  , Hmisc
+  , skimr
+  , tidyverse
+)
+```
+
+## Data
+```{r}
+df_cust <- read.csv(file = "data/olist_customers_dataset.csv", stringsAsFactors = FALSE)
+df_geo_loc <- read.csv(file = "data/olist_geolocation_dataset.csv", stringsAsFactors = FALSE)
+df_order_items <- read.csv(file = "data/olist_order_items_dataset.csv", stringsAsFactors = FALSE)
+df_order_pay <- read.csv(file = "data/olist_order_payments_dataset.csv", stringsAsFactors = FALSE)
+df_order_review <- read.csv(file = "data/olist_order_reviews_dataset.csv", stringsAsFactors = FALSE)
+df_orders <- read.csv(file = "data/olist_orders_dataset.csv", stringsAsFactors = FALSE)
+df_products <- read.csv(file = "data/olist_products_dataset.csv", stringsAsFactors = FALSE)
+df_sellers <- read.csv(file = "data/olist_sellers_dataset.csv", stringsAsFactors = FALSE)
+df_translation <- read.csv(file = "data/product_category_name_translation.csv", stringsAsFactors = FALSE)
+```
+
+### Clean Names
+```{r}
+clean_names_func <- function(df){
+  df <- df %>% clean_names(case = "snake")
+  return (df)
+}
+```
+
+```{r}
+df_cust <- clean_names_func(df_cust)
+df_geo_loc <- clean_names_func(df_olist_geolocation)
+df_order_items <- clean_names_func(df_order_items)
+df_order_pay <- clean_names_func(df_order_pay)
+df_orders <- clean_names_func(df_orders)
+df_products <- clean_names_func(df_products)
+df_sellers <- clean_names_func(df_sellers)
+df_translation <- clean_names_func(df_translation)
+```
+
+# EDA
+## Inspect Data
+```{r}
+df_cust %>% glimpse()
+```
+
+```{r}
+df_geo_loc %>% glimpse()
+```
+
+```{r}
+df_order_items %>% glimpse()
+```
+
+```{r}
+df_order_pay %>% glimpse()
+```
+
+```{r}
+df_order_review %>% glimpse()
+```
+
+```{r}
+df_products %>% glimpse()
+```
+
+```{r}
+df_sellers %>% glimpse()
+```
+
+```{r}
+df_translation %>% glimpse()
+```
+
+## Translate
+We need to translate the prodcut category name from Protugese to English for greater understanding. The dataset provides a translation code dataset
+```{r}
+df_products_translate <- df_products %>% 
+  left_join(y = df_translation,
+            by = c("product_category_name" = "i_product_category_name")) %>% 
+  select(product_id, product_category_name, product_category_name_english, everything()) %>% 
+  select(-product_category_name)
+
+df_products_translate %>% glimpse()
+```
+ 
+# To DO
+* Customer Dataset - Convert Zip Code to String (add leading zeros)
+** Zip Code is in multiple data sets
+* Cluster Analysis
+* Heat Map overlay 

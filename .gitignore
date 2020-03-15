@@ -38,5 +38,5 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
-# Folder
-#/data
+# Data Import Files
+data/*.csv

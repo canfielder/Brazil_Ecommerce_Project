@@ -15,6 +15,7 @@ knitr::opts_chunk$set(echo = TRUE)
 if (!require(pacman)) {install.packages('pacman')} 
 p_load(
     janitor
+  , lubridate
   , Hmisc
   , skimr
   , tidyverse
@@ -44,7 +45,7 @@ clean_names_func <- function(df){
 
 ```{r}
 df_cust <- clean_names_func(df_cust)
-df_geo_loc <- clean_names_func(df_olist_geolocation)
+df_geo_loc <- clean_names_func(df_geo_loc)
 df_order_items <- clean_names_func(df_order_items)
 df_order_pay <- clean_names_func(df_order_pay)
 df_orders <- clean_names_func(df_orders)
@@ -76,6 +77,10 @@ df_order_review %>% glimpse()
 ```
 
 ```{r}
+df_orders %>% glimpse()
+```
+
+```{r}
 df_products %>% glimpse()
 ```
 
@@ -87,7 +92,7 @@ df_sellers %>% glimpse()
 df_translation %>% glimpse()
 ```
 
-## Translate
+### Translate
 We need to translate the prodcut category name from Protugese to English for greater understanding. The dataset provides a translation code dataset
 ```{r}
 df_products_translate <- df_products %>% 
@@ -95,10 +100,69 @@ df_products_translate <- df_products %>%
             by = c("product_category_name" = "i_product_category_name")) %>% 
   select(product_id, product_category_name, product_category_name_english, everything()) %>% 
   select(-product_category_name)
-
-df_products_translate %>% glimpse()
 ```
+
+Now that we've translated the data, we'll take a deeper look at the contents of the dataframe.
+```{r}
+df_products_translate %>% describe()
+```
+
  
+## Shipping Times
+I would like to look at expected shipping times, and create a histogram to see the distribution. This data is contained in the **df_orders** dataframe.
+
+Let's take a quick look at the table.
+```{r}
+df_orders %>% 
+  head()
+```
+
+Now lets look for missing data. 
+```{r}
+df_orders %>% 
+  skim()
+```
+I'm curious what the different order status conditions are, and their distribution. We'll use **Hmisc::describe** to look deeper at that variable.
+```{r}
+df_orders %>% 
+  select(order_status) %>% 
+  describe()
+```
+
+TO analyze shipping times, we need to calculate the time between shipping and delivery. To calculate these times we need the data in a date-time format. Currently all date-time values are character-type. We need to convert the time information from character back to date-time. We'll use **mutate_at** to convert the character-type date-time values back to the needed format.  
+```{r}
+# Define character to date-time converstion (from lubridate) in a function.
+input_function <- function(x, na.rm=FALSE) (ymd_hms(x))
+
+# Define Columns which need to converted from character to date-time.
+input_columns <- c("order_purchase_timestamp",
+                  "order_approved_at",
+                  "order_delivered_carrier_date",
+                  "order_delivered_customer_date",
+                  "order_estimated_delivery_date")
+
+
+# Use above defined inputs to mutate the select columns
+df_orders_dt <- df_orders %>% 
+  mutate_at(.vars = input_columns, 
+            .funs = input_function)
+
+#Inspect Conversion
+df_orders_dt %>% glimpse()
+```
+
+Now we can calculate the number of days between times. The datetime values we have all contain the exact time of day an action occured. But we don't want to deal with partial days. That is not how the customer would think about it. We only care about the day the action occurred, and the number of days in between.  
+```{r}
+df_orders_dt_1 <- df_orders_dt %>% 
+  mutate(days_order_to_delivery = difftime(as_date(order_delivered_customer_date),
+                                           as_date(order_purchase_timestamp),
+                                           units = "days"))
+df_orders_dt_1 %>% 
+  ggplot(aes(x = days_order_to_delivery)) +
+  geom_histogram()
+```
+
+
 # To DO
 * Customer Dataset - Convert Zip Code to String (add leading zeros)
 ** Zip Code is in multiple data sets

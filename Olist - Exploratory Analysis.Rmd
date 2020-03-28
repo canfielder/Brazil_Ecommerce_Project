@@ -1,5 +1,5 @@
 ---
-title: "Brazillian Ecommerce - EDA"
+title: "Brazilian Ecommerce - EDA"
 author: "Evan Canfield"
 date: "3/15/2020"
 output: html_document
@@ -100,16 +100,27 @@ df_brazil_pop %>% glimpse()
 ```
 
 # Data Processing
-There are several areas where we need to perform processing on the data before we can start to analyze. 
+There are several areas where we need to perform processing on the data before we can start to analyze.
+
+## Typos
+There are two typos in the column names for Products (may be an issue with translation/symbol conversion.) 
+```{r}
+df_products_corr <- df_products %>% 
+  rename(product_name_length = product_name_lenght,
+         product_description_length = product_description_lenght)
+```
 
 ## Translate
-We need to translate the prodcut category name from Protugese to English for greater understanding. The dataset provides a translation code dataset
+We need to translate the product category name from Portuguese to English for greater understanding. The dataset provides a translation code dataset
 ```{r}
-df_products_translate <- df_products %>% 
+df_products_translate <- df_products_corr %>% 
   left_join(y = df_translation,
             by = c("product_category_name" = "i_product_category_name")) %>% 
   select(product_id, product_category_name, product_category_name_english, everything()) %>% 
-  select(-product_category_name)
+  select(-product_category_name) %>% 
+  rename(product_category_name_eng = product_category_name_english)
+
+df_products_translate %>% glimpse()
 ```
 
 Now that we've translated the data, we'll take a deeper look at the contents of the dataframe.
@@ -120,13 +131,13 @@ Now that we've translated the data, we'll take a deeper look at the contents of 
 ## Product IDs - Shorten
 The product ID tags are very long, and difficult to work with. For other id tags, this isn't a problem, because they will only be used for connecting tables. But the product id may be displayed on charts and tables. 
 
-I wasn to see if I can shorten it, while maintaining the unique tag nature. There are 32,951 unique product id tags.
+I want to see if I can shorten it, while maintaining the unique tag nature. There are 32,951 unique product id tags.
 ```{r}
 prod_unique <- df_products_translate %>% 
   select(product_id) %>% 
   n_distinct()
 
-prod_unique
+paste0("The number of unique product ids: ", prod_unique)
 ```
 The shortest product string in the product id column is 32 characters. So is the maximum. In actuality, all product id tags are 32 characters.
 ```{r}
@@ -275,7 +286,7 @@ df_brazil_pop %>% glimpse()
 ```
 
 ## Convert Population State Code to Character
-The **cod_uf** variable in the Brazil populatin dataframe functions like a character variable. To correclty use it, we need to convert it to character.
+The **cod_uf** variable in the Brazil population dataframe functions like a character variable. To correctly use it, we need to convert it to character.
 ```{r}
 df_brazil_pop <- df_brazil_pop %>% 
   mutate(cod_uf = as.character(cod_uf))
@@ -305,17 +316,17 @@ The following section will break down the total sales by certain factors. This i
 There are 71 number of unique categories. 
 ```{r}
 df_products_translate %>% 
-  select(product_category_name_english) %>% 
+  select(product_category_name_eng) %>% 
   describe()
 ```
 
-This is an unweildy number of unique categories. Lets see what the frequency of each category being used is by sale. Maybe we can drop some. Otherwise, maybe we can group them.
+This is an unwieldy number of unique categories. Lets see what the frequency of each category being used is by sale. Maybe we can drop some. Otherwise, maybe we can group them.
 
 ```{r}
 category_by_sales <- df_order_items %>% 
   left_join(df_products_translate, by = "product_id") %>% 
-  select(product_id, price, product_category_name_english) %>% 
-  group_by(product_category_name_english) %>% 
+  select(product_id, price, product_category_name_eng) %>% 
+  group_by(product_category_name_eng) %>% 
   summarise(total_sales = sum(price)) %>% 
   ungroup() %>% 
   arrange(desc(total_sales)) %>% 
@@ -324,7 +335,7 @@ category_by_sales <- df_order_items %>%
 category_by_sales
 ```
 
-Note, the top 20 categories account for 84.02% of sales. While this is a large percentage, I do not think it is dominant enough to just drop other categories. Instead, a select number of superceding categories should be developed.
+Note, the top 20 categories account for 84.02% of sales. While this is a large percentage, I do not think it is dominant enough to just drop other categories. Instead, a select number of superseding categories should be developed.
 ```{r}
 category_by_sales %>% head(20) %>%
   select(-total_sales) %>% 
@@ -341,12 +352,12 @@ df_order_items %>%
   arrange(desc(total_sales)) %>% 
   mutate(percent_total = round((total_sales/sum(total_sales) * 100),2)) %>% 
   left_join(df_products_translate %>% 
-              select(product_id, product_category_name_english), 
+              select(product_id, product_category_name_eng), 
             by = "product_id") 
 ```
 
 ## State - Raw
-We wil now see what states spend the most.
+We will now see what states spend the most.
 ```{r}
 df_total_sales_states <- df_order_pay %>% 
   left_join(df_orders, "order_id") %>% 
@@ -386,22 +397,23 @@ Nothing generally unexpected here. At first glance, the more prosperous states s
 # Product Categories
 As previously shown, there are 71 unique categories.
 ```{r}
-df_products_translate %>% select(product_category_name_english) %>% describe()
+df_products_translate %>% select(product_category_name_eng) %>% describe()
 ```
 
 This is may be too many categories to make a useful feature in any modeling. So if possible, it would be worth creating a smaller number of encompassing categories. To do so, we need to create a list of the existing categories.
 ```{r}
 df_product_cat <- df_products_translate %>% 
-  select(product_category_name_english) %>% 
+  select(product_category_name_eng) %>% 
   unique() %>% 
-  arrange(product_category_name_english)
+  arrange(product_category_name_eng)
 
 df_product_cat
 ```
 
 
 
-# Logisic Regression 
+# Logistic Regression 
+## Determine Return Customers
 We want to see if we can determine what factors impact whether a consumer is a return consumer or a one-time user. 
 
 We start by determining the amount of orders each customer made. We will initially be using the Orders dataframe. This dataframe lists each order by **customer_id**. But each unique customer can have multiple **customer_id** values. That is why there is a **customer_unique_id** value in the Customer dataframe. We need to join that dataframe in order to evaluate unique customers.
@@ -420,10 +432,81 @@ df_orders <- df_orders %>%
   mutate(repeat_cust = if_else(condition = order_count > 1, 1, 0)) 
 ```
 
+## Create Dataset - Customer Based
+Now that we have defined our dependent variable, we need to create the dataset. We care going to make this a customer based dataset, where each observation represents a customer.Therefore, we will need aggregate values for each customer. The following will be used as features:
+
+* Spent - price, avg
+* Spent - freight, avg
+* Shipping times, avg
+
+
+# Customer Segmentation
+## Create Dataset
+To create the input dataset for custermer segmentaion, we are going to look at the following variables: 
+
+* Spent (Price), avg
+* Spent (Freight), avg
+* Payment Installments, avg
+* Review score, avg (Check complete enough)
+* Shipping time, avg (days)
+* Distance between customer/seller (maybe)
+
+```{r}
+df_cust %>% glimpse()
+
+df_order_items %>% glimpse() 
+
+df_order_pay %>% glimpse()  
+
+df_order_review %>% glimpse()
+
+df_orders %>% glimpse()
+```
+
+
+First, we slim down the order dataframe to useful variables. I also notice a small amount of NAs in the order data. This is most likely due to canceled orders. It is a small enough percentage, and the missing data cannot be imputed, so we will drop this data.
+```{r}
+df_cust_seg_1 <- df_orders %>% 
+  select(order_id, customer_id, customer_unique_id, 
+         order_purchase_timestamp, order_approved_at, order_delivered_customer_date) %>% 
+  drop_na()
+```
+
+Furthermore, we can then calculate shipping and acceptance time with the available date-time variables. 
+```{r}
+# Calculate Shipping Time - Days
+df_cust_seg_2 <- df_cust_seg_1 %>% 
+  mutate(days_to_deliver = difftime(as.Date(order_delivered_customer_date),
+                                    as_date(order_purchase_timestamp),
+                                     units = "days"),
+         days_to_deliver = as.integer(days_to_deliver))
+
+# Calculate Acceptance Time - Minutes
+df_cust_seg_3 <- df_cust_seg_2 %>% 
+    mutate(mins_to_accept = difftime(order_approved_at,
+                                    order_purchase_timestamp,
+                                     units = "mins"),
+  mins_to_accept = as.integer(mins_to_accept)
+    )
+
+# Drop Variables No Longer Needed
+df_cust_seg_4 <- df_cust_seg_3 %>% 
+  select(order_id, customer_unique_id,
+         days_to_deliver, mins_to_accept)
+
+# Insepct Data
+df_cust_seg_4 %>% glimpse()
+```
+
+Now we will connect the review data to see if there is a complete enough dataset to use that information. 
+```{r}
+
+```
+
 
 
 # For Later
-Now we can calculate the number of days between times. The datetime values we have all contain the exact time of day an action occured. But we don't want to deal with partial days. That is not how the customer would think about it. We only care about the day the action occurred, and the number of days in between.  
+Now we can calculate the number of days between times. The date-time values we have all contain the exact time of day an action occurred. But we don't want to deal with partial days. That is not how the customer would think about it. We only care about the day the action occurred, and the number of days in between.  
 ```{r}
 df_orders_dt_1 <- df_orders_dt %>% 
   mutate(days_order_to_delivery = difftime(as_date(order_delivered_customer_date),

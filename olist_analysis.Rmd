@@ -1,0 +1,694 @@
+---
+title: "Brazilian Ecommerce - EDA"
+author: "Evan Canfield"
+date: "3/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import
+## Libraries
+```{r}
+if (!require(pacman)) {install.packages('pacman')} 
+p_load(
+  geosphere, 
+  janitor, 
+  lubridate, 
+  Hmisc,
+  purrr,
+  skimr, 
+  tidyverse
+)
+```
+
+## Data
+```{r}
+# Olist Dataset
+df_cust <- read.csv(file = "data/olist_customers_dataset.csv", stringsAsFactors = FALSE)
+df_geo_loc <- read.csv(file = "data/olist_geolocation_dataset.csv", stringsAsFactors = FALSE)
+df_order_items <- read.csv(file = "data/olist_order_items_dataset.csv", stringsAsFactors = FALSE)
+df_order_pay <- read.csv(file = "data/olist_order_payments_dataset.csv", stringsAsFactors = FALSE)
+df_order_review <- read.csv(file = "data/olist_order_reviews_dataset.csv", stringsAsFactors = FALSE)
+df_orders <- read.csv(file = "data/olist_orders_dataset.csv", stringsAsFactors = FALSE)
+df_products <- read.csv(file = "data/olist_products_dataset.csv", stringsAsFactors = FALSE)
+df_sellers <- read.csv(file = "data/olist_sellers_dataset.csv", stringsAsFactors = FALSE)
+df_translation <- read.csv(file = "data/product_category_name_translation.csv", stringsAsFactors = FALSE)
+
+# Brazillian Population Data
+df_brazil_pop <- read.csv(file = "data/population_estimates_dou_2019.csv", stringsAsFactors = FALSE)
+```
+
+### Clean Names
+The following function converts column names to snake case.
+```{r}
+clean_names_func <- function(df){
+  df <- df %>% clean_names(case = "snake")
+  return (df)
+}
+
+df_cust <- clean_names_func(df_cust)
+df_geo_loc <- clean_names_func(df_geo_loc)
+df_order_items <- clean_names_func(df_order_items)
+df_order_pay <- clean_names_func(df_order_pay)
+df_orders <- clean_names_func(df_orders)
+df_products <- clean_names_func(df_products)
+df_sellers <- clean_names_func(df_sellers)
+df_translation <- clean_names_func(df_translation)
+df_brazil_pop <- clean_names_func(df_brazil_pop)
+```
+
+# Inspect Data
+```{r}
+df_cust %>% glimpse()
+```
+
+```{r}
+df_geo_loc %>% glimpse()
+```
+
+```{r}
+df_order_items %>% glimpse()
+```
+
+```{r}
+df_order_pay %>% glimpse()
+```
+
+```{r}
+df_order_review %>% glimpse()
+```
+
+```{r}
+df_orders %>% glimpse()
+```
+
+```{r}
+df_products %>% glimpse()
+```
+
+```{r}
+df_sellers %>% glimpse()
+```
+
+```{r}
+df_translation %>% glimpse()
+```
+
+```{r}
+df_brazil_pop %>% glimpse()
+```
+
+# Data Processing
+There are several areas where we need to perform processing on the data before we can start to analyze.
+
+## Typos
+There are two typos in the column names for Products (may be an issue with translation/symbol conversion.) 
+```{r}
+df_products_corr <- df_products %>% 
+  rename(product_name_length = product_name_lenght,
+         product_description_length = product_description_lenght)
+```
+
+## Translate
+We need to translate the product category name from Portuguese to English for greater understanding. The dataset provides a translation code dataset
+```{r}
+df_products_translate <- df_products_corr %>% 
+  left_join(y = df_translation,
+            by = c("product_category_name" = "i_product_category_name")) %>% 
+  select(product_id, product_category_name, product_category_name_english, everything()) %>% 
+  select(-product_category_name) %>% 
+  rename(product_category_name_eng = product_category_name_english)
+
+df_products_translate %>% glimpse()
+```
+
+Now that we've translated the data, we'll take a deeper look at the contents of the dataframe.
+```{r}
+#df_products_translate %>% describe()
+```
+
+## Product IDs - Shorten
+The product ID tags are very long, and difficult to work with. For other id tags, this isn't a problem, because they will only be used for connecting tables. But the product id may be displayed on charts and tables. 
+
+I want to see if I can shorten it, while maintaining the unique tag nature. There are 32,951 unique product id tags.
+```{r}
+prod_unique <- df_products_translate %>% 
+  select(product_id) %>% 
+  n_distinct()
+
+paste0("The number of unique product ids: ", prod_unique)
+```
+The shortest product string in the product id column is 32 characters. So is the maximum. In actuality, all product id tags are 32 characters.
+```{r}
+min_prod_id_string <- min(nchar(df_products_translate$product_id))
+
+paste0("The minimum length of a product id string is ", min_prod_id_string, " characters.")
+```
+
+
+If we shorten the tag, we need to determine that we still have unique ids. The following code crops the product id by **n** characters, from the right. It then checks against the known number of unique product ids. The process continues until enough characters have been cropped to create some duplicate id values. 
+```{r}
+n <- prod_unique
+x = min_prod_id_string
+
+while (TRUE){
+  if (n == prod_unique){
+    n <- df_products_translate %>% 
+    select(product_id) %>% 
+    mutate(product_id = str_sub(product_id, start = -x)) %>% 
+    n_distinct()
+    
+    #print(paste0("Unique values: ",n))
+    #print(paste0("Number of digits:", x))
+    #print(paste0("***"))
+    x = x-1
+  }
+    else{
+      output_response <- paste0("Shortest string to maintain unique product_id: ", x + 2, " characters.")
+      return(print(output_response))
+    }
+}
+```
+
+So, we can shorten product id to only 8 characters, a much more manageable string to view in tables and charts. We need to make this change at all product_id instances.
+```{r}
+df_products_translate <- df_products_translate %>% 
+  mutate(product_id = str_sub(product_id, start = -x-2))
+
+df_order_items <- df_order_items %>% 
+  mutate(product_id = str_sub(product_id, start = -x-2))
+```
+
+ 
+## Convert Time
+The dataset has a variety of date-time stamp variables. Some of these will be an important variable for further analysis. We need to convert date-time values, which were imported as characters, into Posix date-time values. There are date-time variables in the order table and review table. 
+
+Let's take a quick look at the table.
+```{r}
+df_orders %>% 
+  head()
+```
+
+Now lets look for missing data. Lucky for us there is no missing data in this table.
+```{r}
+df_orders %>%   skim()
+```
+
+
+To convert date-time character strings, We'll use **mutate_at** to convert the character-type date-time values back to the needed format. 
+
+We will define a function for a **mutate_at** call.
+### Function
+```{r}
+# Define character to date-time converstion (from lubridate) in a function.
+input_function <- function(x, na.rm=FALSE) (ymd_hms(x))
+```
+
+### Order Table
+```{r}
+# Define Columns which need to converted from character to date-time.
+input_columns <- c("order_purchase_timestamp",
+                  "order_approved_at",
+                  "order_delivered_carrier_date",
+                  "order_delivered_customer_date",
+                  "order_estimated_delivery_date")
+
+
+# Use above defined inputs to mutate the select columns
+df_orders <- df_orders %>% 
+  mutate_at(.vars = input_columns, 
+            .funs = input_function)
+
+#Inspect Conversion
+df_orders %>% glimpse()
+```
+
+I noticed there is a **order_status** variable. I'm curious what the different status conditions are, and their distribution. We'll use **Hmisc::describe** to look deeper at that variable.
+```{r}
+df_orders %>% select(order_status) %>%  describe()
+```
+So 97% of all statuses are that the order was delivered. I suppose this is a very useful value from order to delivery, as the status might change. But looking at historical data, nearly all packages are delivered. Not much information provided by this variable. 
+
+### Review Table
+After performing the transformation for the review table, I notice that the review creation date does not come with a useful time stamp, only a date. 
+```{r}
+# Define Columns which need to converted from character to date-time.
+input_columns <- c("review_creation_date",
+                  "review_answer_timestamp")
+
+
+# Use above defined inputs to mutate the select columns
+df_order_review <- df_order_review %>% 
+  mutate_at(.vars = input_columns, 
+            .funs = input_function)
+
+#Inspect Conversion
+df_order_review %>% glimpse()
+```
+
+## Location Code Conversion
+Some location code information has lost information. Some city zip codes and region codes have leading zero values. When they are imported into this notebook, they are imported as integers, and these leading zeros get dropped. But these codes function as strings. Therefore, we need to convert these codes back to strings and ensure any dropped leading zeros are reinserted.  
+
+The codes that need to be adjusted are:
+* Customer Zip
+* Seller Zip
+* Geo Location Zip
+* Municipal code (From Brazilian Population Data)
+
+First we develop a function that takes a dataframe and column name. 
+
+### Function 
+```{r}
+fun_pad_zero <- function(df, col_name){
+  
+  col_name = enquo(col_name)
+  
+  # Determine Max Code Length
+  max_len <-df %>% 
+  mutate(!!quo_name(col_name) := as.character(!!col_name), 
+         code_len = str_length(!!col_name)) %>%
+  summarise(max = max(code_len)) %>%
+  as.integer()
+
+  # Pad Zeros
+  df <- df %>% 
+    mutate(!!quo_name(col_name) := str_pad(string = !!col_name,
+                                           width = max_len, 
+                                           side = "left", 
+                                           pad = 0))
+  
+  return(df)
+}
+```
+
+### Convert
+```{r echo=FALSE, results='hide'}
+df_geo_loc<- fun_pad_zero(df = df_geo_loc,
+             col_name = geolocation_zip_code_prefix)
+
+df_cust<- fun_pad_zero(df = df_cust,
+             col_name = customer_zip_code_prefix)
+
+df_sellers<- fun_pad_zero(df = df_sellers,
+             col_name = seller_zip_code_prefix)
+
+df_brazil_pop<- fun_pad_zero(df = df_brazil_pop,
+             col_name = cod_munic)
+```
+
+Evaluate zero padding worked.
+```{r}
+#df_geo_loc %>% glimpse()
+#df_cust %>% glimpse()
+#df_sellers %>% glimpse()
+#df_brazil_pop %>% glimpse()
+```
+
+## Convert Population State Code to Character
+The **cod_uf** variable in the Brazil population dataframe functions like a character variable. To correctly use it, we need to convert it to character.
+```{r}
+df_brazil_pop <- df_brazil_pop %>% 
+  mutate(cod_uf = as.character(cod_uf))
+
+df_brazil_pop %>% glimpse()
+```
+
+
+### Customer Zip
+```{r}
+df_cust<- fun_pad_zero(df = df_cust,
+             col_name = customer_zip_code_prefix)
+
+df_cust %>% glimpse()
+```
+
+
+# Sales Breakdown By Categories
+The following section will break down the total sales by certain factors. This information is meant to provide some basic descriptive information.
+
+## Product Category
+There are 71 number of unique categories. 
+```{r}
+df_products_translate %>% 
+  select(product_category_name_eng) %>% 
+  describe()
+```
+
+This is an unwieldy number of unique categories. Lets see what the frequency of each category being used is by sale. Maybe we can drop some. Otherwise, maybe we can group them.
+```{r}
+category_by_sales <- df_order_items %>% 
+  left_join(df_products_translate, by = "product_id") %>% 
+  select(product_id, price, product_category_name_eng) %>% 
+  group_by(product_category_name_eng) %>% 
+  summarise(total_sales = sum(price)) %>% 
+  ungroup() %>% 
+  arrange(desc(total_sales)) %>% 
+  mutate(percent_total = round((total_sales/sum(total_sales) * 100),2))
+
+category_by_sales
+```
+
+Note, the top 20 categories account for 84.02% of sales. While this is a large percentage, I do not think it is dominant enough to just drop other categories. Instead, a select number of superseding categories should be developed.
+```{r}
+category_by_sales %>% head(20) %>%
+  select(-total_sales) %>% 
+  summarise(n = sum(percent_total))
+```
+
+## Product Id
+We want to see what the highest selling items were, and what category they fall into.
+```{r}
+df_order_items %>% 
+  group_by(product_id) %>% 
+  summarise(total_sales = sum(price)) %>% 
+  ungroup() %>% 
+  arrange(desc(total_sales)) %>% 
+  mutate(percent_total = round((total_sales/sum(total_sales) * 100),2)) %>% 
+  left_join(df_products_translate %>% 
+              select(product_id, product_category_name_eng), 
+            by = "product_id") 
+```
+
+## State - Raw
+We will now see what states spend the most.
+```{r}
+df_total_sales_states <- df_order_pay %>% 
+  left_join(df_orders, "order_id") %>% 
+  left_join(df_cust, "customer_id") %>% 
+  select(payment_value, customer_state) %>% 
+  group_by(customer_state) %>% 
+  summarise(total_sales = sum(payment_value)) %>% 
+  arrange(desc(total_sales)) %>% 
+  mutate(total_sales_percent = round((total_sales/sum(total_sales) * 100),1))
+
+df_total_sales_states
+```
+
+## State - Population Adjusted
+I now want to see what state spends the most per person.
+
+State Population projections from the Brazilian Institute of Geography and Statistics were found here [https://www.ibge.gov.br/en/statistics/social/population/18448-estimates-of-resident-population-for-municipalities-and-federation-units.html?=&t=resultados](https://www.ibge.gov.br/en/statistics/social/population/18448-estimates-of-resident-population-for-municipalities-and-federation-units.html?=&t=resultados). 
+
+I will use these projections to calculate sales per population. First, I need to translate Brazil's population data from to the state level. The population data imported was documented at the municipal district level.
+
+```{r}
+df_brazil_pop_state <- df_brazil_pop %>% 
+  group_by(uf) %>%
+  summarise(pop_estimate = sum(populacao_estimada))
+```
+
+Now we join the state population data to the state sales data. Then we calculate money spent per 1K people.
+```{r}
+df_total_sales_states %>% 
+  left_join(df_brazil_pop_state, by = c("customer_state" = "uf")) %>% 
+  mutate(sales_per_k = round(1000*total_sales / pop_estimate,1)) %>% 
+  arrange(desc(sales_per_k))
+```
+
+Nothing generally unexpected here. At first glance, the more prosperous states spend more per person. Note, DF is the Federal District aka Brasilia. So while small (2.2% total sales), it is the capital.
+
+# Product Categories
+As previously shown, there are 71 unique categories.
+```{r}
+df_products_translate %>% select(product_category_name_eng) %>% describe()
+```
+
+This is may be too many categories to make a useful feature in any modeling. So if possible, it would be worth creating a smaller number of encompassing categories. To do so, we need to create a list of the existing categories.
+```{r}
+df_product_cat <- df_products_translate %>% 
+  select(product_category_name_eng) %>% 
+  unique() %>% 
+  arrange(product_category_name_eng)
+
+df_product_cat
+```
+
+# Logistic Regression 
+## Determine Return Customers
+We want to see if we can determine what factors impact whether a consumer is a return consumer or a one-time user. 
+
+We start by determining the amount of orders each customer made. We will initially be using the Orders dataframe. This dataframe lists each order by **customer_id**. But each unique customer can have multiple **customer_id** values. That is why there is a **customer_unique_id** value in the Customer dataframe. We need to join that dataframe in order to evaluate unique customers.
+
+Then, we use the **add_count** function to count the number of times **customer_id** occurs.
+```{r}
+df_orders <- df_orders %>% 
+  left_join(df_cust, by = "customer_id") %>% 
+  add_count(customer_unique_id) %>% 
+  rename(order_count = n)
+```
+
+With the number of orders each unique customer, I can label which customers are repeat, and which are not.
+```{r}
+df_orders <- df_orders %>% 
+  mutate(repeat_cust = if_else(condition = order_count > 1, 1, 0)) 
+```
+
+## Create Dataset - Customer Based
+Now that we have defined our dependent variable, we need to create the dataset. We care going to make this a customer based dataset, where each observation represents a customer.Therefore, we will need aggregate values for each customer. The following will be used as features:
+
+* Spent - price, avg
+* Spent - freight, avg
+* Shipping times, avg
+
+
+# Customer Segmentation
+## Create Dataset
+To create the input dataset for custermer segmentaion, we are going to look at the following variables: 
+
+* Spent (Price), avg
+* Spent (Freight), avg
+* Payment Installments, avg
+* Review score, avg (Check complete enough)
+* Days to complete review, avg
+* Shipping time, avg (days)
+* Distance between customer/seller (maybe)
+
+### Shipping Times
+First, we slim down the order dataframe to useful variables. I also notice a small amount of NAs in the order data. This is most likely due to canceled orders. It is a small enough percentage, and the missing data cannot be imputed, so we will drop this data.
+```{r}
+df_cust_seg_1 <- df_orders %>% 
+  select(order_id, customer_id, customer_unique_id, 
+         order_purchase_timestamp, order_approved_at, order_delivered_customer_date) %>% 
+  drop_na()
+```
+
+Furthermore, we can then calculate shipping and acceptance time with the available date-time variables. 
+```{r}
+# Calculate Shipping Time - Days
+df_cust_seg_2 <- df_cust_seg_1 %>% 
+  mutate(days_to_deliver = difftime(as.Date(order_delivered_customer_date),
+                                    as_date(order_purchase_timestamp),
+                                     units = "days"),
+         days_to_deliver = as.integer(days_to_deliver))
+
+# Calculate Acceptance Time - Minutes
+df_cust_seg_3 <- df_cust_seg_2 %>% 
+    mutate(mins_to_accept = difftime(order_approved_at,
+                                    order_purchase_timestamp,
+                                     units = "mins"),
+  mins_to_accept = as.integer(mins_to_accept)
+    )
+
+# Drop Variables No Longer Needed
+df_cust_seg_4 <- df_cust_seg_3 %>% 
+  select(order_id, customer_unique_id,
+         days_to_deliver, mins_to_accept)
+
+# Insepct Data
+df_cust_seg_4 %>% glimpse()
+```
+
+### Review Information
+Now we will connect the review data to see if there is a complete enough dataset to use that information. Using the skim function, we can see that every order has a review value. 
+```{r}
+# Check For Missing Values
+df_cust_seg_5 <- df_cust_seg_4%>% 
+  left_join(df_order_review, by = "order_id")
+
+df_cust_seg_5 %>%  skim()
+```
+
+We also have two date-time values, when a review survey was created, and when it was completed. Lets Calculate the number of days between events, just to see if anything is there. Also, we only care about the time span. Once we're through, we can drop unneeded data.
+```{r}
+df_cust_seg_6 <- df_cust_seg_5 %>% 
+  mutate(days_to_review = difftime(as.Date(review_answer_timestamp),
+                                    as_date(review_creation_date),
+                                     units = "days"),
+         days_to_review = as.integer(days_to_review)) %>% 
+  select(-(review_id:review_answer_timestamp))
+
+df_cust_seg_6 %>% glimpse()
+```
+
+### Money Spent on Item and Freight / Number of Packages
+The following section will calculate three values for each order:
+
+* Number of packages
+* Total Spent - Price
+* Total Spent - Freight
+
+First, we get the total number of packages in each order.
+
+```{r}
+df_order_items_agg_1 <- df_order_items %>% 
+  add_count(order_id) %>% 
+  rename(package_count = n)
+```
+
+Now we will bring in the amount of money spent on the item and freight for each order. This data is given to use for each item in the order. We'll need to group by order_id to get the aggregate values.
+
+**Note**: We use the mean to determine package count, because we need to use a summarise action in the function. But because all values of package count associated with a order id are the same, the mean just returns the actual package count.
+```{r}
+df_order_items_agg_2 <- df_order_items_agg_1 %>% 
+  group_by(order_id) %>% 
+  summarise(price_total = sum(price), 
+            freight_total = sum(freight_value),
+            package_count = mean(package_count)) %>% 
+  ungroup()
+
+df_order_items_agg_2 %>% glimpse()
+```
+
+Now that we have aggregated the price and frieght costs per purchase, we can join this data to the customer segmentation dataset.
+```{r}
+df_cust_seg_7 <- df_cust_seg_6 %>% 
+  left_join(df_order_items_agg_2, by = "order_id")
+
+df_cust_seg_7 %>% glimpse()
+```
+
+### Payment Installments
+The final part of the dataset is the number of payment installments used for each order. 
+```{r}
+
+df_cust_seg_8 <- df_cust_seg_7 %>% 
+  left_join(df_order_pay %>% 
+              select(order_id,
+                     payment_installments), 
+            by = "order_id")
+
+df_cust_seg_8 %>% glimpse()
+```
+
+### Aggregate By Customer
+Now that we have all the raw data on a order level, we need to aggregate the data for the customer. For this, we are going to calculate the average for every variable. We can also now drop order_id, as it is no longer needed.
+
+```{r}
+df_cust_seg_9 <- df_cust_seg_8 %>% 
+  select(-order_id) %>% 
+  group_by(customer_unique_id) %>% 
+  summarise_all(.funs = funs(mean)) %>% 
+  ungroup() %>% 
+  setNames(paste0( names(.), "_avg")) %>% 
+  rename(customer_unique_id = customer_unique_id_avg)
+
+df_cust_seg_9 %>% head()
+```
+
+# Geographic Analysis
+As part of the potential geographic analysis of the data, I want to determine the shipping distance for each order (direct point to point). To do this, I need to first develop a dataframe with the order_id, customer_id, and seller_id. I will also include the time of the order incase I want to do time lapse analysis in the future.
+```{r}
+df_geo_analysis_1 <- df_order_items %>% 
+  select(order_id, seller_id) %>%
+  left_join(df_orders %>% 
+              select(order_id, customer_id, order_purchase_timestamp),
+            by ="order_id")
+```
+
+With this data I can then join the customer and seller tables to the new dataframe to determine the zip codes of each. I'll also keep the city and state information for each customer, just in case.
+```{r}
+# Join Customer Data
+df_geo_analysis_2 <-  df_geo_analysis_1 %>% 
+  left_join(df_cust %>% 
+              select(customer_id, customer_zip_code_prefix, 
+                     customer_city ,customer_state),
+            by = "customer_id")
+
+# Join Seller Data
+df_geo_analysis_3 <- df_geo_analysis_2 %>% 
+  left_join(df_sellers, by = "seller_id")
+
+df_geo_analysis_3 %>% glimpse()
+```
+
+Now, with the customer and seller geographical location data associated with each order, we join the geographic data table to get the latitude and longitude for each person.
+
+One issue that we need to deal with first, is that there are mulitple lat/lon values provided for each zip code. To make things simpler, and to be able to calculate distances from customer to seller, we need to determine a single lat/lon value for every zip code. To do this, we will take the average of the latitude and longitude values for each zip. 
+First we need to filter out any erronious our outlier zip codes. Based on this post 
+[https://worldpopulationreview.com/country-locations/where-is-brazil/](https://worldpopulationreview.com/country-locations/where-is-brazil/), the following are the latitude and longitude extremes of Brazil.
+
+```{r}
+# Northen Extreme
+lat_n <- -5.25
+
+# Southen Extreme
+lat_s <- -33.75
+
+# Eastern Extreme
+lng_e <- -28.873889
+
+# WEstern Extreme
+lng_w <- -73.984444
+```
+
+To ensure the latitude and longitude values we are working with are within these bounds, we need to filter the data.Then, we calculate the average of each zip code. 
+```{r}
+df_geo_loc_avg <- df_geo_loc %>% 
+  filter(between(x = geolocation_lat, left = lat_s, right = lat_n),
+         between(x = geolocation_lng, left = lng_w, right = lng_e)
+         ) %>% 
+  group_by(geolocation_zip_code_prefix) %>% 
+  summarise(geolocation_lat_avg = mean(geolocation_lat),
+            geolocation_lng_avg = mean(geolocation_lng)) %>% 
+  ungroup()
+```
+
+
+With a single lat/lon value for each zip code we can join this table to generate the lat/lon coordinates for the seller and customer on each order.
+```{r}
+# Join Customer Latitude / Longitude
+df_geo_analysis_4 <-  df_geo_analysis_3 %>% 
+  left_join(df_geo_loc_avg,
+            by = c("customer_zip_code_prefix" = "geolocation_zip_code_prefix")) %>%  
+  rename(lat_customer = geolocation_lat_avg,
+         lng_customer = geolocation_lng_avg)
+
+# Join Seller Latitude / Longitude
+df_geo_analysis_5 <-  df_geo_analysis_4 %>% 
+  left_join(df_geo_loc_avg,
+            by = c("seller_zip_code_prefix" = "geolocation_zip_code_prefix")) %>%  
+  rename(lat_seller = geolocation_lat_avg,
+         lng_seller = geolocation_lng_avg)
+
+df_geo_analysis_5 %>% glimpse()
+```
+
+To finish this step, I am going to rearrange the columns for readability.
+```{r}
+df_geo_analysis_6 <- df_geo_analysis_5 %>% 
+select(order_id, customer_id, seller_id, order_purchase_timestamp, 
+       customer_city, customer_state, customer_zip_code_prefix, lat_customer, lng_customer,
+       seller_city, seller_state, seller_zip_code_prefix, lat_seller, lng_seller)
+
+df_geo_analysis_6 %>% glimpse()
+```
+
+
+With our lat/lon coordinates in place, we can now start calculating the distance between each customer/seller pair on each order. The **distHaversine** function returns distance in meters, as a default. I have converted those distances to km.
+
+```{r}
+# Mapped Function
+f <- function(a, b, c, d) distm(x = c(a,b), y = c(c,d), fun = distHaversine)
+
+df_geo_analysis_6 <- df_geo_analysis_5 %>% 
+  mutate(
+    dist_km = pmap_dbl(.l = list(lat_customer, lng_customer, lat_seller, lng_seller), 
+                    .f = f
+                    ) * 1e-3
+  )
+
+df_geo_analysis_6 %>% glimpse()
+```

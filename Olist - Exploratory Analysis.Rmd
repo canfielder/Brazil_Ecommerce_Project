@@ -182,7 +182,7 @@ df_order_items <- df_order_items %>%
 
  
 ## Convert Time
-shipping times will be an important variable for further analysis. We need to convert date-time values, which were imported as characters, into Posix date-time values. Once this is complete, we can then easily  
+The dataset has a variety of date-time stamp variables. Some of these will be an important variable for further analysis. We need to convert date-time values, which were imported as characters, into Posix date-time values. There are date-time variables in the order table and review table. 
 
 Let's take a quick look at the table.
 ```{r}
@@ -196,11 +196,17 @@ df_orders %>%   skim()
 ```
 
 
-To convert date-time character strings, We'll use **mutate_at** to convert the character-type date-time values back to the needed format.  
+To convert date-time character strings, We'll use **mutate_at** to convert the character-type date-time values back to the needed format. 
+
+We will define a function for a **mutate_at** call.
+### Function
 ```{r}
 # Define character to date-time converstion (from lubridate) in a function.
 input_function <- function(x, na.rm=FALSE) (ymd_hms(x))
+```
 
+### Order Table
+```{r}
 # Define Columns which need to converted from character to date-time.
 input_columns <- c("order_purchase_timestamp",
                   "order_approved_at",
@@ -223,6 +229,23 @@ I noticed there is a **order_status** variable. I'm curious what the different s
 df_orders %>% select(order_status) %>%  describe()
 ```
 So 97% of all statuses are that the order was delivered. I suppose this is a very useful value from order to delivery, as the status might change. But looking at historical data, nearly all packages are delivered. Not much information provided by this variable. 
+
+### Review Table
+After performing the transformation for the review table, I notice that the review creation date does not come with a useful time stamp, only a date. 
+```{r}
+# Define Columns which need to converted from character to date-time.
+input_columns <- c("review_creation_date",
+                  "review_answer_timestamp")
+
+
+# Use above defined inputs to mutate the select columns
+df_order_review <- df_order_review %>% 
+  mutate_at(.vars = input_columns, 
+            .funs = input_function)
+
+#Inspect Conversion
+df_order_review %>% glimpse()
+```
 
 ## Location Code Conversion
 Some location code information has lost information. Some city zip codes and region codes have leading zero values. When they are imported into this notebook, they are imported as integers, and these leading zeros get dropped. But these codes function as strings. Therefore, we need to convert these codes back to strings and ensure any dropped leading zeros are reinserted.  
@@ -410,8 +433,6 @@ df_product_cat <- df_products_translate %>%
 df_product_cat
 ```
 
-
-
 # Logistic Regression 
 ## Determine Return Customers
 We want to see if we can determine what factors impact whether a consumer is a return consumer or a one-time user. 
@@ -498,9 +519,15 @@ df_cust_seg_4 <- df_cust_seg_3 %>%
 df_cust_seg_4 %>% glimpse()
 ```
 
-Now we will connect the review data to see if there is a complete enough dataset to use that information. 
+Now we will connect the review data to see if there is a complete enough dataset to use that information. Using the skim function, we can see that every order has a review value. We also have two date-time values, when a review survey was created, and when it was completed. Lets Calculate the number of days between events, just to see if anything is there. 
 ```{r}
+# Check For Missing Values
+df_cust_seg_5 <- df_cust_seg_4%>% 
+  left_join(df_order_review, by = "order_id")
 
+df_cust_seg_5 %>%  skim()
+
+df_cust_seg_5 %>% glimpse()
 ```
 
 

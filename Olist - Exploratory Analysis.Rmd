@@ -469,22 +469,11 @@ To create the input dataset for custermer segmentaion, we are going to look at t
 * Spent (Freight), avg
 * Payment Installments, avg
 * Review score, avg (Check complete enough)
+* Days to complete review, avg
 * Shipping time, avg (days)
 * Distance between customer/seller (maybe)
 
-```{r}
-df_cust %>% glimpse()
-
-df_order_items %>% glimpse() 
-
-df_order_pay %>% glimpse()  
-
-df_order_review %>% glimpse()
-
-df_orders %>% glimpse()
-```
-
-
+### Shipping Times
 First, we slim down the order dataframe to useful variables. I also notice a small amount of NAs in the order data. This is most likely due to canceled orders. It is a small enough percentage, and the missing data cannot be imputed, so we will drop this data.
 ```{r}
 df_cust_seg_1 <- df_orders %>% 
@@ -519,27 +508,88 @@ df_cust_seg_4 <- df_cust_seg_3 %>%
 df_cust_seg_4 %>% glimpse()
 ```
 
-Now we will connect the review data to see if there is a complete enough dataset to use that information. Using the skim function, we can see that every order has a review value. We also have two date-time values, when a review survey was created, and when it was completed. Lets Calculate the number of days between events, just to see if anything is there. 
+### Review Information
+Now we will connect the review data to see if there is a complete enough dataset to use that information. Using the skim function, we can see that every order has a review value. 
 ```{r}
 # Check For Missing Values
 df_cust_seg_5 <- df_cust_seg_4%>% 
   left_join(df_order_review, by = "order_id")
 
 df_cust_seg_5 %>%  skim()
-
-df_cust_seg_5 %>% glimpse()
 ```
 
-
-
-# For Later
-Now we can calculate the number of days between times. The date-time values we have all contain the exact time of day an action occurred. But we don't want to deal with partial days. That is not how the customer would think about it. We only care about the day the action occurred, and the number of days in between.  
+We also have two date-time values, when a review survey was created, and when it was completed. Lets Calculate the number of days between events, just to see if anything is there. Also, we only care about the time span. Once we're through, we can drop unneeded data.
 ```{r}
-df_orders_dt_1 <- df_orders_dt %>% 
-  mutate(days_order_to_delivery = difftime(as_date(order_delivered_customer_date),
-                                           as_date(order_purchase_timestamp),
-                                           units = "days"))
-df_orders_dt_1 %>% 
-  ggplot(aes(x = days_order_to_delivery)) +
-  geom_histogram()
+df_cust_seg_6 <- df_cust_seg_5 %>% 
+  mutate(days_to_review = difftime(as.Date(review_answer_timestamp),
+                                    as_date(review_creation_date),
+                                     units = "days"),
+         days_to_review = as.integer(days_to_review)) %>% 
+  select(-(review_id:review_answer_timestamp))
+
+df_cust_seg_6 %>% glimpse()
 ```
+
+### Money Spent on Item and Freight / Number of Packages
+The following section will calculate three values for each order:
+
+* Number of packages
+* Total Spent - Price
+* Total Spent - Freight
+
+First, we get the total number of packages in each order.
+
+```{r}
+df_order_items_agg_1 <- df_order_items %>% 
+  add_count(order_id) %>% 
+  rename(package_count = n)
+```
+
+Now we will bring in the amount of money spent on the item and freight for each order. This data is given to use for each item in the order. We'll need to group by order_id to get the aggregate values.
+
+**Note**: We use the mean to determine package count, because we need to use a summarise action in the function. But because all values of package count associated with a order id are the same, the mean just returns the actual package count.
+```{r}
+df_order_items_agg_2 <- df_order_items_agg_1 %>% 
+  group_by(order_id) %>% 
+  summarise(price_total = sum(price), 
+            freight_total = sum(freight_value),
+            package_count = mean(package_count)) %>% 
+  ungroup()
+
+df_order_items_agg_2 %>% glimpse()
+```
+
+Now that we have aggregated the price and frieght costs per purchase, we can join this data to the customer segmentation dataset.
+```{r}
+df_cust_seg_7 <- df_cust_seg_6 %>% 
+  left_join(df_order_items_agg_2, by = "order_id")
+
+df_cust_seg_7 %>% glimpse()
+```
+
+### Payment Installments
+The final part of the dataset is the number of payment installments used for each order. 
+```{r}
+
+ <- df_cust_seg_7 %>% 
+  left_join(df_order_pay %>% 
+              select(order_id,
+                     payment_installments), 
+            by = "order_id")
+
+df_cust_seg_8 %>% glimpse()
+```
+
+### Aggregate By Customer
+Now that we have all the raw data on a order level, we need to aggregate the data for the customer. For this, we are going to calculate the average for every variable. We can also now drop order_id, as it is no longer needed.
+
+```{r}
+df_cust_seg_8 %>% 
+  select(-order_id) %>% 
+  group_by(customer_unique_id) %>% 
+  summarise_all(.funs = funs(mean)) %>% 
+  ungroup() %>% 
+  setNames(paste0( names(.), "_avg")) %>% 
+  rename(customer_unique_id = customer_unique_id_avg)
+```
+

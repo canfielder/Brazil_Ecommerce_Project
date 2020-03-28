@@ -170,7 +170,7 @@ df_order_items <- df_order_items %>%
 ```
 
  
-## Shipping Times
+## Convert Time
 shipping times will be an important variable for further analysis. We need to convert date-time values, which were imported as characters, into Posix date-time values. Once this is complete, we can then easily  
 
 Let's take a quick look at the table.
@@ -199,12 +199,12 @@ input_columns <- c("order_purchase_timestamp",
 
 
 # Use above defined inputs to mutate the select columns
-df_orders_dt <- df_orders %>% 
+df_orders <- df_orders %>% 
   mutate_at(.vars = input_columns, 
             .funs = input_function)
 
 #Inspect Conversion
-df_orders_dt %>% glimpse()
+df_orders %>% glimpse()
 ```
 
 I noticed there is a **order_status** variable. I'm curious what the different status conditions are, and their distribution. We'll use **Hmisc::describe** to look deeper at that variable.
@@ -402,6 +402,24 @@ df_product_cat
 
 
 # Logisic Regression 
+We want to see if we can determine what factors impact whether a consumer is a return consumer or a one-time user. 
+
+We start by determining the amount of orders each customer made. We will initially be using the Orders dataframe. This dataframe lists each order by **customer_id**. But each unique customer can have multiple **customer_id** values. That is why there is a **customer_unique_id** value in the Customer dataframe. We need to join that dataframe in order to evaluate unique customers.
+
+Then, we use the **add_count** function to count the number of times **customer_id** occurs.
+```{r}
+df_orders <- df_orders %>% 
+  left_join(df_cust, by = "customer_id") %>% 
+  add_count(customer_unique_id) %>% 
+  rename(order_count = n)
+```
+
+With the number of orders each unique customer, I can label which customers are repeat, and which are not.
+```{r}
+df_orders <- df_orders %>% 
+  mutate(repeat_cust = if_else(condition = order_count > 1, 1, 0)) 
+```
+
 
 
 # For Later

@@ -14,6 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 if (!require(pacman)) {install.packages('pacman')} 
 p_load(
+  broom,
   geosphere, 
   janitor, 
   lubridate, 
@@ -42,7 +43,7 @@ df_brazil_pop <- read.csv(file = "data/population_estimates_dou_2019.csv", strin
 ```
 
 ### Clean Names
-The following function converts column names to snake case.
+The following function converts column names to snake case so there is a consistent look to all the column names.
 ```{r}
 clean_names_func <- function(df){
   df <- df %>% clean_names(case = "snake")
@@ -61,6 +62,8 @@ df_brazil_pop <- clean_names_func(df_brazil_pop)
 ```
 
 # Inspect Data
+The following section looks at each imported dataframe in order to get an idea of what data is in each.
+
 ```{r}
 df_cust %>% glimpse()
 ```
@@ -105,7 +108,7 @@ df_brazil_pop %>% glimpse()
 There are several areas where we need to perform processing on the data before we can start to analyze.
 
 ## Typos
-There are two typos in the column names for Products (may be an issue with translation/symbol conversion.) 
+There are two typos in the column names for Products (may be an issue with translation/symbol conversion). This is just going to bug me, so I'm going to fix it at the start. 
 ```{r}
 df_products_corr <- df_products %>% 
   rename(product_name_length = product_name_lenght,
@@ -113,7 +116,7 @@ df_products_corr <- df_products %>%
 ```
 
 ## Translate
-We need to translate the product category name from Portuguese to English for greater understanding. The dataset provides a translation code dataset
+We need to translate the product category name from Portuguese to English for greater understanding. The dataset provides a translation code dataset. 
 ```{r}
 df_products_translate <- df_products_corr %>% 
   left_join(y = df_translation,
@@ -125,15 +128,10 @@ df_products_translate <- df_products_corr %>%
 df_products_translate %>% glimpse()
 ```
 
-Now that we've translated the data, we'll take a deeper look at the contents of the dataframe.
-```{r}
-#df_products_translate %>% describe()
-```
-
 ## Product IDs - Shorten
-The product ID tags are very long, and difficult to work with. For other id tags, this isn't a problem, because they will only be used for connecting tables. But the product id may be displayed on charts and tables. 
+The **product_id** tags are very long, and difficult to work with. For other id tags, this isn't a problem, because they will only be used for connecting tables. But the **product_id** may be displayed on charts and tables. 
 
-I want to see if I can shorten it, while maintaining the unique tag nature. There are 32,951 unique product id tags.
+I want to see if I can shorten it, while maintaining the unique tag nature. There are 32,951 unique **product_id** tags.
 ```{r}
 prod_unique <- df_products_translate %>% 
   select(product_id) %>% 
@@ -141,15 +139,15 @@ prod_unique <- df_products_translate %>%
 
 paste0("The number of unique product ids: ", prod_unique)
 ```
-The shortest product string in the product id column is 32 characters. So is the maximum. In actuality, all product id tags are 32 characters.
+
+The shortest product string in the **product_id** column is 32 characters. So is the maximum. In actuality, all product id tags are 32 characters.
 ```{r}
 min_prod_id_string <- min(nchar(df_products_translate$product_id))
 
 paste0("The minimum length of a product id string is ", min_prod_id_string, " characters.")
 ```
 
-
-If we shorten the tag, we need to determine that we still have unique ids. The following code crops the product id by **n** characters, from the right. It then checks against the known number of unique product ids. The process continues until enough characters have been cropped to create some duplicate id values. 
+If we shorten the tag, we need to determine that we still have unique ids. The following code crops the product id by **n** characters, from the left. It then checks against the known number of unique product ids. The process continues until enough characters have been cropped to create some duplicate id values, meaning no every **prodcut_id** is unique. 
 ```{r}
 n <- prod_unique
 x = min_prod_id_string
@@ -173,7 +171,7 @@ while (TRUE){
 }
 ```
 
-So, we can shorten product id to only 8 characters, a much more manageable string to view in tables and charts. We need to make this change at all product_id instances.
+So, we can shorten product id to only 8 characters, a much more manageable string to view in tables and charts. We need to make this change at all **product_id** instances.
 ```{r}
 df_products_translate <- df_products_translate %>% 
   mutate(product_id = str_sub(product_id, start = -x-2))
@@ -184,7 +182,7 @@ df_order_items <- df_order_items %>%
 
  
 ## Convert Time
-The dataset has a variety of date-time stamp variables. Some of these will be an important variable for further analysis. We need to convert date-time values, which were imported as characters, into Posix date-time values. There are date-time variables in the order table and review table. 
+The dataset has a variety of date-time stamp variables. Some of these will be an important variable for further analysis. All date-time values were imported as character type. These character-type variables need to be converted to date-time variables. There are date-time variables in the order table and review table. 
 
 Let's take a quick look at the table.
 ```{r}
@@ -208,6 +206,8 @@ input_function <- function(x, na.rm=FALSE) (ymd_hms(x))
 ```
 
 ### Order Table
+
+With the function. We can now mutate the select columns.
 ```{r}
 # Define Columns which need to converted from character to date-time.
 input_columns <- c("order_purchase_timestamp",
@@ -226,14 +226,15 @@ df_orders <- df_orders %>%
 df_orders %>% glimpse()
 ```
 
+#### Side Note
 I noticed there is a **order_status** variable. I'm curious what the different status conditions are, and their distribution. We'll use **Hmisc::describe** to look deeper at that variable.
 ```{r}
 df_orders %>% select(order_status) %>%  describe()
 ```
-So 97% of all statuses are that the order was delivered. I suppose this is a very useful value from order to delivery, as the status might change. But looking at historical data, nearly all packages are delivered. Not much information provided by this variable. 
+So 97% of all statuses are that the order was delivered. I suppose this is a very useful value in between product order to delivery, as the status might change. But looking at historical data, nearly all packages are delivered. Not much information provided by this variable. 
 
 ### Review Table
-After performing the transformation for the review table, I notice that the review creation date does not come with a useful time stamp, only a date. 
+After performing the transformation for the review table, I notice that the review creation date does not come with a time stamp, only the date. 
 ```{r}
 # Define Columns which need to converted from character to date-time.
 input_columns <- c("review_creation_date",
@@ -250,7 +251,7 @@ df_order_review %>% glimpse()
 ```
 
 ## Location Code Conversion
-Some location code information has lost information. Some city zip codes and region codes have leading zero values. When they are imported into this notebook, they are imported as integers, and these leading zeros get dropped. But these codes function as strings. Therefore, we need to convert these codes back to strings and ensure any dropped leading zeros are reinserted.  
+Some location code information has lost information. All city zip codes and region codes have a set number of values, all numeric. Some of these codes have leading zeros, meaning, a code which looks like 0####. All of these imported codes in this notebook are imported as integers, and not as character strings. When the codes with leading zeros are imported as integers, the leading zeros get dropped. Without these leading zeros, the codes will not function correctly for joining tables. Therefore, we need to convert these codes back to strings and ensure any dropped leading zeros are reinserted.  
 
 The codes that need to be adjusted are:
 * Customer Zip
@@ -285,6 +286,7 @@ fun_pad_zero <- function(df, col_name){
 ```
 
 ### Convert
+With the function defined we can convert the required columns.
 ```{r echo=FALSE, results='hide'}
 df_geo_loc<- fun_pad_zero(df = df_geo_loc,
              col_name = geolocation_zip_code_prefix)
@@ -426,15 +428,27 @@ df_product_cat <- df_products_translate %>%
 df_product_cat
 ```
 
-# Logistic Regression 
-## Determine Return Customers
+# Dataset Development
+The main analysis in this project will be the following:
+
+1. Logistic Regression: Use logistic regression with return customers and the dependent variable
+2. Clustering: Use kmean clustering to segement our customer base.
+
+To perform these analyses, we are going to develop two basic datasets, and then make minor adjustments to each dataset for specific to the analysis. 
+
+The difference between the two datasets is one will be order based, and the other customer based. 
+
+We will start by developing a order-based dataset, and then take aggregate values to convert it to a customer based dataset. 
+
+## Order-Based Dataset
+### Determine Return Customers
 We want to see if we can determine what factors impact whether a consumer is a return consumer or a one-time user. 
 
 We start by determining the amount of orders each customer made. We will initially be using the Orders dataframe. This dataframe lists each order by **customer_id**. But each unique customer can have multiple **customer_id** values. That is why there is a **customer_unique_id** value in the Customer dataframe. We need to join that dataframe in order to evaluate unique customers.
 
 Then, we use the **add_count** function to count the number of times **customer_id** occurs.
 ```{r}
-df_orders <- df_orders %>% 
+df_return_1 <- df_orders %>% 
   left_join(df_cust, by = "customer_id") %>% 
   add_count(customer_unique_id) %>% 
   rename(order_count = n)
@@ -442,50 +456,57 @@ df_orders <- df_orders %>%
 
 With the number of orders each unique customer, I can label which customers are repeat, and which are not.
 ```{r}
-df_orders <- df_orders %>% 
+df_return_2 <- df_return_1 %>% 
   mutate(repeat_cust = if_else(condition = order_count > 1, 1, 0)) 
 ```
 
-## Create Dataset - Customer Based
-Now that we have defined our dependent variable, we need to create the dataset. We care going to make this a customer based dataset, where each observation represents a customer.Therefore, we will need aggregate values for each customer. The following will be used as features:
+#### Percent Return Customers, By State
+Breakdown of the return customer rate in each state. Plus density plot. There honsestly a decent standard distribution on this, generally focused around 6%.
+```{r}
+df_percent_return_by_state <- df_return_2 %>% 
+  group_by(customer_state) %>% 
+  summarise(total_orders = n(), 
+            total_orders_repeat = sum(repeat_cust)) %>% 
+  mutate(percent_repeat = round(100*total_orders_repeat/total_orders, 1)) %>% 
+  arrange(desc(percent_repeat))
 
-* Spent - price, avg
-* Spent - freight, avg
-* Shipping times, avg
+df_percent_return_by_state
+```
+
+Histogram of state breakdown.
+```{r}
+ggplot(data = df_percent_return_by_state,
+       mapping = aes(x=percent_repeat)) +
+  geom_density()
+```
 
 
-# Customer Segmentation
-## Create Dataset
-To create the input dataset for custermer segmentaion, we are going to look at the following variables: 
-
-* Spent (Price), avg
-* Spent (Freight), avg
-* Payment Installments, avg
-* Review score, avg (Check complete enough)
-* Days to complete review, avg
-* Shipping time, avg (days)
-* Distance between customer/seller (maybe)
 
 ### Shipping Times
 First, we slim down the order dataframe to useful variables. I also notice a small amount of NAs in the order data. This is most likely due to canceled orders. It is a small enough percentage, and the missing data cannot be imputed, so we will drop this data.
 ```{r}
-df_cust_seg_1 <- df_orders %>% 
-  select(order_id, customer_id, customer_unique_id, 
+df_base_order_1 <- df_orders %>% 
+  left_join(df_cust %>% select(customer_id, customer_unique_id), by = "customer_id" ) %>% 
+  select(order_id, customer_id, customer_unique_id,
          order_purchase_timestamp, order_approved_at, order_delivered_customer_date) %>% 
   drop_na()
+
+df_base_order_1
 ```
 
 Furthermore, we can then calculate shipping and acceptance time with the available date-time variables. 
+
+For the number of days to deliver, we will calcuate the time in hours, convert to days, and round up. I tried just converting to days initially, but this led to problems with log transformations downstream. This results in all non-zero values. The lowest non-rounded day is 0.53.
 ```{r}
 # Calculate Shipping Time - Days
-df_cust_seg_2 <- df_cust_seg_1 %>% 
-  mutate(days_to_deliver = difftime(as.Date(order_delivered_customer_date),
-                                    as_date(order_purchase_timestamp),
-                                     units = "days"),
-         days_to_deliver = as.integer(days_to_deliver))
+df_base_order_2 <- df_base_order_1 %>% 
+  mutate(days_to_deliver = difftime((order_delivered_customer_date),
+                                    (order_purchase_timestamp),
+                                     units = "mins"),
+         days_to_deliver = ceiling(as.integer(days_to_deliver)/(24*60)))
 
 # Calculate Acceptance Time - Minutes
-df_cust_seg_3 <- df_cust_seg_2 %>% 
+df_base_order_3 <- df_base_order_2 %>% 
     mutate(mins_to_accept = difftime(order_approved_at,
                                     order_purchase_timestamp,
                                      units = "mins"),
@@ -493,34 +514,48 @@ df_cust_seg_3 <- df_cust_seg_2 %>%
     )
 
 # Drop Variables No Longer Needed
-df_cust_seg_4 <- df_cust_seg_3 %>% 
+df_base_order_4 <- df_base_order_3 %>% 
   select(order_id, customer_unique_id,
          days_to_deliver, mins_to_accept)
 
 # Insepct Data
-df_cust_seg_4 %>% glimpse()
+df_base_order_4 %>% glimpse()
+
+#df_base_order_4 %>% select(days_to_deliver) %>% describe()
 ```
 
 ### Review Information
 Now we will connect the review data to see if there is a complete enough dataset to use that information. Using the skim function, we can see that every order has a review value. 
 ```{r}
-# Check For Missing Values
-df_cust_seg_5 <- df_cust_seg_4%>% 
+df_base_order_5 <- df_base_order_4%>% 
   left_join(df_order_review, by = "order_id")
 
-df_cust_seg_5 %>%  skim()
+df_base_order_5 %>%  skim()
 ```
 
 We also have two date-time values, when a review survey was created, and when it was completed. Lets Calculate the number of days between events, just to see if anything is there. Also, we only care about the time span. Once we're through, we can drop unneeded data.
 ```{r}
-df_cust_seg_6 <- df_cust_seg_5 %>% 
+df_base_order_6 <- df_base_order_5 %>% 
   mutate(days_to_review = difftime(as.Date(review_answer_timestamp),
                                     as_date(review_creation_date),
                                      units = "days"),
          days_to_review = as.integer(days_to_review)) %>% 
-  select(-(review_id:review_answer_timestamp))
+  select(-(review_comment_message:review_answer_timestamp), -review_id, -review_comment_title)
 
-df_cust_seg_6 %>% glimpse()
+df_base_order_6 %>% glimpse()
+```
+
+Before we get to aggregate cost per order, I need to add Product Id to the dataset.
+
+```{r}
+df_base_order_7 <- df_base_order_6 %>% 
+  left_join(df_order_items %>% 
+              select(order_id, product_id), by= "order_id") %>% 
+  left_join(df_products_translate %>% 
+              select(product_id, product_category_name_eng), by = "product_id") %>% 
+  select(-product_id)
+
+df_base_order_7 %>% glimpse()
 ```
 
 ### Money Spent on Item and Freight / Number of Packages
@@ -554,39 +589,214 @@ df_order_items_agg_2 %>% glimpse()
 
 Now that we have aggregated the price and frieght costs per purchase, we can join this data to the customer segmentation dataset.
 ```{r}
-df_cust_seg_7 <- df_cust_seg_6 %>% 
+df_base_order_8 <- df_base_order_7 %>% 
   left_join(df_order_items_agg_2, by = "order_id")
 
-df_cust_seg_7 %>% glimpse()
+df_base_order_8 %>% head(20)
 ```
 
 ### Payment Installments
 The final part of the dataset is the number of payment installments used for each order. 
 ```{r}
-
-df_cust_seg_8 <- df_cust_seg_7 %>% 
+df_base_order_9 <- df_base_order_8 %>% 
   left_join(df_order_pay %>% 
-              select(order_id,
+              select(order_id, payment_type,
                      payment_installments), 
             by = "order_id")
 
-df_cust_seg_8 %>% glimpse()
+df_base_order_9 %>% glimpse()
 ```
 
-### Aggregate By Customer
-Now that we have all the raw data on a order level, we need to aggregate the data for the customer. For this, we are going to calculate the average for every variable. We can also now drop order_id, as it is no longer needed.
+### Return Customer
+Finally, we add if the customer was a return customer (1) or not (0).
+```{r}
+df_base_order_10 <- df_base_order_9 %>%
+  add_count(customer_unique_id) %>%
+  mutate(return = if_else(n > 1, 1, 0)) %>% 
+  select(-n)
+
+df_base_order_10 %>% glimpse()
+```
+```{r}
+df_base_order_10 %>% select(return) %>% describe()
+```
+
+For future use we defien the order dataset. This way if more processing is needed, we can do it above this code block and it won't affect downstream calculations.
+```{r}
+df_order_processed <- df_base_order_10
+```
+
+
+## Customer Based Dataset
+Now that we have all the raw data on a order level, we need to aggregate the data for the customer. For this, we are going to calculate the average for every numeric variable. For categorical variables, we need to decide how to define them. For now, the categorical variable (**product_category_name_eng ** and **payment_type**) for each customer will which ever category the most **price_total** was spent.
+
+New Variables:
+
+* product_category_cust: The product category where the customer spent the most money (**price_total**)
+* payment_type_cust: The payment type with which the customer spent the most money (**price_total**)
+
+For both variables, in the event of a tie, the categorical variable is selected randomly.
+
+We can also now drop order_id, as it is no longer needed.
+
+First we check how many unique customers there are, as a check for future calculations.
 
 ```{r}
-df_cust_seg_9 <- df_cust_seg_8 %>% 
-  select(-order_id) %>% 
-  group_by(customer_unique_id) %>% 
-  summarise_all(.funs = funs(mean)) %>% 
-  ungroup() %>% 
-  setNames(paste0( names(.), "_avg")) %>% 
-  rename(customer_unique_id = customer_unique_id_avg)
-
-df_cust_seg_9 %>% head()
+df_order_processed %>% 
+  distinct(customer_unique_id) %>% 
+  nrow()
 ```
+
+
+First we determine the average of the numeric variables.
+```{r}
+df_base_cust_1 <- df_order_processed %>%
+  select(-order_id, -product_category_name_eng, -payment_type) %>%
+  group_by(customer_unique_id) %>% 
+  summarise_all(.funs = funs(mean)) %>%
+  ungroup() %>%
+  setNames(paste0( names(.), "_avg")) %>% 
+  rename(customer_unique_id = customer_unique_id_avg,
+         return = return_avg)
+
+df_base_cust_1 %>% glimpse()
+```
+
+```{r}
+df_base_cust_1 %>% select(return) %>% describe()
+```
+
+
+Then we calculate the new variables, **product_category_cust** and  **payment_type_cust**.
+
+We'll start with the product category.
+```{r}
+df_base_cust_product <- df_base_order_10 %>% 
+  select(customer_unique_id, price_total, product_category_name_eng) %>% 
+  group_by(customer_unique_id, product_category_name_eng) %>% 
+  summarise(total_spent = sum(price_total)) %>%
+  mutate(rank_product_cat = rank(-total_spent, ties.method = "random")) %>%
+  filter(rank_product_cat == 1) %>% 
+  select(-rank_product_cat, -total_spent) %>% 
+  ungroup() %>% 
+  rename(product_category_cust = product_category_name_eng)
+
+df_base_cust_product %>% glimpse()
+```
+
+We'll now do the same with payment type.
+```{r}
+df_base_cust_payment <- df_base_order_10 %>% 
+  select(customer_unique_id, price_total, payment_type) %>% 
+  group_by(customer_unique_id, payment_type) %>% 
+  summarise(total_spent = sum(price_total)) %>%
+  mutate(rank_product_cat = rank(-total_spent, ties.method = "random")) %>%
+  filter(rank_product_cat == 1) %>% 
+  select(-rank_product_cat, -total_spent) %>% 
+  ungroup() %>% 
+  rename(payment_type_cust = payment_type)
+
+df_base_cust_payment %>% glimpse()
+```
+
+With the product category and payment type calcualted on the customer level, we can rejoin these values to the customer dataset.
+```{r}
+df_base_cust_2 <- df_base_cust_1 %>% 
+  left_join(df_base_cust_product,  by = "customer_unique_id") %>%  
+  left_join(df_base_cust_payment,  by = "customer_unique_id")
+
+df_base_cust_2 %>% glimpse()
+```
+
+
+```{r}
+df_cust_processed <- df_base_cust_2
+```
+
+# Logistic Regression Modeling
+## Order Dataset
+### Transformations 
+With the starting datasets developed, we now need to look at the data to see if it's appropriate for logistic regression, or if transformations are needed.
+
+First, we'll look at the distribution of each numeric variable.
+
+```{r}
+df_order_processed %>%
+  select(-return) %>% 
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_density()
+```
+
+Few thoughts: 
+* **review_score** has discrete values. This should be categorical, not numeric.
+* Log transformations may be appropriate for the remaining variables. 
+
+Based on the above insights, we'll transform the data.
+
+First, we transform the review score to a factor type.
+```{r}
+df_order_transform_1 <- df_order_processed %>% 
+  mutate(review_score = as.factor(review_score))
+```
+
+Then, we log transform each numerical value, and generate a density plot of each one.
+```{r}
+df_order_transform_1 %>%
+  select(-return) %>% 
+  keep(is.numeric) %>%
+  gather() %>% 
+  mutate(value = log(value)) %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_density()
+  
+```
+
+
+**price_total** should definitely be transformed. I initially thought **days_to_deliver** should be transformed as well, although something weird is going on when log(days) are less than two. The other variables do not have a normal distribution. We'll drop these.
+
+We'll also drop NA values. There are only 1660 observations, out of 115715.
+
+```{r}
+df_order_transform_2 <- df_order_transform_1 %>% 
+  mutate(days_to_deliver_log = log(days_to_deliver),
+         price_total_log = log(price_total),
+         return = as.factor(return)) %>% 
+  select(return, everything(), -c(days_to_review, freight_total, mins_to_accept, package_count, 
+            payment_installments, price_total, days_to_deliver,
+            order_id, customer_unique_id)) %>% 
+  drop_na()
+
+df_order_transform_2 %>% glimpse()
+```
+
+```{r}
+df_order_model <- df_order_transform_2
+
+df_order_model %>% skim()
+```
+
+### Modeling
+```{r}
+model_order <- glm(formula = return ~ .,
+                   data = df_order_model, 
+                  family = binomial())
+```
+
+```{r}
+summary(model_order)
+```
+
+
+### Tests
+
+* Multicollinearity  - VIF
+* homoskedasticity
+* normality - pnorm, qnorm
+
 
 # Geographic Analysis
 As part of the potential geographic analysis of the data, I want to determine the shipping distance for each order (direct point to point). To do this, I need to first develop a dataframe with the order_id, customer_id, and seller_id. I will also include the time of the order incase I want to do time lapse analysis in the future.

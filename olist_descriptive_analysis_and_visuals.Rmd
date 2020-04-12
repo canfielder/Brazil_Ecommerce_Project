@@ -1,0 +1,1078 @@
+---
+title: "Brazilian Ecommerce - EDA"
+author: "Evan Canfield"
+date: "3/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import
+## Libraries
+```{r}
+if (!require(pacman)) {install.packages('pacman')} 
+p_load(
+  broom,
+  geobr, 
+  geosphere, 
+  janitor, 
+  lubridate, 
+  Hmisc,
+  plotly,
+  purrr,
+  scales, 
+  skimr, 
+  tidyverse,
+  zoo
+)
+```
+
+## Data
+```{r}
+# Olist Dataset
+df_cust <- read.csv(file = "data/olist_customers_dataset.csv", stringsAsFactors = FALSE)
+df_geo_loc <- read.csv(file = "data/olist_geolocation_dataset.csv", stringsAsFactors = FALSE)
+df_order_items <- read.csv(file = "data/olist_order_items_dataset.csv", stringsAsFactors = FALSE)
+df_order_pay <- read.csv(file = "data/olist_order_payments_dataset.csv", stringsAsFactors = FALSE)
+df_order_review <- read.csv(file = "data/olist_order_reviews_dataset.csv", stringsAsFactors = FALSE)
+df_orders <- read.csv(file = "data/olist_orders_dataset.csv", stringsAsFactors = FALSE)
+df_products <- read.csv(file = "data/olist_products_dataset.csv", stringsAsFactors = FALSE)
+df_sellers <- read.csv(file = "data/olist_sellers_dataset.csv", stringsAsFactors = FALSE)
+df_translation <- read.csv(file = "data/product_category_name_translation.csv", stringsAsFactors = FALSE)
+
+# Brazillian Population Data
+df_brazil_pop <- read.csv(file = "data/population_estimates_dou_2019.csv", stringsAsFactors = FALSE)
+
+# Recode Categories
+df_category_recode = read.csv(file = "data/category_grouping_active.csv", stringsAsFactors = FALSE)
+
+# Shapefile Import
+y <- 2018
+sf_br_state <- read_state(code_state="all", year=y)
+```
+
+## Color Definitions
+```{r}
+color_olist_blue <- "#0c29d0"
+color_olist_highlight_comp <- "#d0510c"
+color_olist_highlight = "#FBBC04"
+color_olist_grey <-"#F7F9F9"
+color_dark_grey <- "#7f7f7f"
+```
+
+
+### Clean Names
+The following function converts column names to snake case so there is a consistent look to all the column names.
+```{r}
+clean_names_func <- function(df){
+  df <- df %>% clean_names(case = "snake")
+  return (df)
+}
+
+df_cust <- clean_names_func(df_cust)
+df_geo_loc <- clean_names_func(df_geo_loc)
+df_order_items <- clean_names_func(df_order_items)
+df_order_pay <- clean_names_func(df_order_pay)
+df_orders <- clean_names_func(df_orders)
+df_products <- clean_names_func(df_products)
+df_sellers <- clean_names_func(df_sellers)
+df_translation <- clean_names_func(df_translation)
+df_brazil_pop <- clean_names_func(df_brazil_pop)
+```
+
+# Inspect Data
+The following section looks at each imported dataframe in order to get an idea of what data is in each.
+
+```{r}
+df_cust %>% glimpse()
+```
+
+```{r}
+df_geo_loc %>% glimpse()
+```
+
+```{r}
+df_order_items %>% glimpse()
+```
+
+```{r}
+df_order_pay %>% glimpse()
+```
+
+```{r}
+df_order_review %>% glimpse()
+```
+
+```{r}
+df_orders %>% glimpse()
+```
+
+```{r}
+df_products %>% glimpse()
+```
+
+```{r}
+df_sellers %>% glimpse()
+```
+
+```{r}
+df_translation %>% glimpse()
+```
+
+```{r}
+df_brazil_pop %>% glimpse()
+```
+
+# Data Processing
+There are several areas where we need to perform processing on the data before we can start to analyze.
+
+## Typos
+There are two typos in the column names for Products (may be an issue with translation/symbol conversion). This is just going to bug me, so I'm going to fix it at the start. 
+```{r}
+df_products_corr <- df_products %>% 
+  rename(product_name_length = product_name_lenght,
+         product_description_length = product_description_lenght)
+```
+
+## Translate
+We need to translate the product category name from Portuguese to English for greater understanding. The dataset provides a translation code dataset. 
+```{r}
+df_products_translate <- df_products_corr %>% 
+  left_join(y = df_translation,
+            by = c("product_category_name" = "i_product_category_name")) %>% 
+  select(product_id, product_category_name, product_category_name_english, everything()) %>% 
+  select(-product_category_name) %>% 
+  rename(product_category_name_eng = product_category_name_english)
+
+df_products_translate %>% glimpse()
+```
+
+Add recoded product categories
+```{r}
+df_products_translate <- df_products_translate %>% 
+  left_join(df_category_recode, by = "product_category_name_eng") %>% 
+  select(product_id, product_category_name_eng, product_category_recode, everything())
+```
+
+## Product IDs - Shorten
+The **product_id** tags are very long, and difficult to work with. For other id tags, this isn't a problem, because they will only be used for connecting tables. But the **product_id** may be displayed on charts and tables. 
+
+I want to see if I can shorten it, while maintaining the unique tag nature. There are 32,951 unique **product_id** tags.
+```{r}
+prod_unique <- df_products_translate %>% 
+  select(product_id) %>% 
+  n_distinct()
+
+paste0("The number of unique product ids: ", prod_unique)
+```
+
+The shortest product string in the **product_id** column is 32 characters. So is the maximum. In actuality, all product id tags are 32 characters.
+```{r}
+min_prod_id_string <- min(nchar(df_products_translate$product_id))
+
+paste0("The minimum length of a product id string is ", min_prod_id_string, " characters.")
+```
+
+If we shorten the tag, we need to determine that we still have unique ids. The following code crops the product id by **n** characters, from the left. It then checks against the known number of unique product ids. The process continues until enough characters have been cropped to create some duplicate id values, meaning no every **prodcut_id** is unique. 
+```{r}
+n <- prod_unique
+x = min_prod_id_string
+
+while (TRUE){
+  if (n == prod_unique){
+    n <- df_products_translate %>% 
+    select(product_id) %>% 
+    mutate(product_id = str_sub(product_id, start = -x)) %>% 
+    n_distinct()
+    
+    #print(paste0("Unique values: ",n))
+    #print(paste0("Number of digits:", x))
+    #print(paste0("***"))
+    x = x-1
+  }
+    else{
+      output_response <- paste0("Shortest string to maintain unique product_id: ", x + 2, " characters.")
+      return(print(output_response))
+    }
+}
+```
+
+So, we can shorten product id to only 8 characters, a much more manageable string to view in tables and charts. We need to make this change at all **product_id** instances.
+```{r}
+df_products_translate <- df_products_translate %>% 
+  mutate(product_id = str_sub(product_id, start = -x-2))
+
+df_order_items <- df_order_items %>% 
+  mutate(product_id = str_sub(product_id, start = -x-2))
+```
+
+ 
+## Convert Time
+The dataset has a variety of date-time stamp variables. Some of these will be an important variable for further analysis. All date-time values were imported as character type. These character-type variables need to be converted to date-time variables. There are date-time variables in the order table and review table. 
+
+Let's take a quick look at the table.
+```{r}
+df_orders %>% 
+  head()
+```
+
+Now lets look for missing data. Lucky for us there is no missing data in this table.
+```{r}
+df_orders %>%   skim()
+```
+
+
+To convert date-time character strings, We'll use **mutate_at** to convert the character-type date-time values back to the needed format. 
+
+We will define a function for a **mutate_at** call.
+### Function
+```{r}
+# Define character to date-time converstion (from lubridate) in a function.
+input_function <- function(x, na.rm=FALSE) (ymd_hms(x))
+```
+
+### Order Table
+With the function. We can now mutate the select columns.
+```{r}
+# Define Columns which need to converted from character to date-time.
+input_columns <- c("order_purchase_timestamp",
+                  "order_approved_at",
+                  "order_delivered_carrier_date",
+                  "order_delivered_customer_date",
+                  "order_estimated_delivery_date")
+
+
+# Use above defined inputs to mutate the select columns
+df_orders <- df_orders %>% 
+  mutate_at(.vars = input_columns, 
+            .funs = input_function)
+
+#Inspect Conversion
+df_orders %>% glimpse()
+```
+
+#### Side Note
+I noticed there is a **order_status** variable. I'm curious what the different status conditions are, and their distribution. We'll use **Hmisc::describe** to look deeper at that variable.
+```{r}
+df_orders %>% select(order_status) %>%  describe()
+```
+So 97% of all statuses are that the order was delivered. I suppose this is a very useful value in between product order to delivery, as the status might change. But looking at historical data, nearly all packages are delivered. Not much information provided by this variable. 
+
+### Review Table
+After performing the transformation for the review table, I notice that the review creation date does not come with a time stamp, only the date. 
+```{r}
+# Define Columns which need to converted from character to date-time.
+input_columns <- c("review_creation_date",
+                  "review_answer_timestamp")
+
+
+# Use above defined inputs to mutate the select columns
+df_order_review <- df_order_review %>% 
+  mutate_at(.vars = input_columns, 
+            .funs = input_function)
+
+#Inspect Conversion
+df_order_review %>% glimpse()
+```
+
+## Location Code Conversion
+Some location code information has lost information. All city zip codes and region codes have a set number of values, all numeric. Some of these codes have leading zeros, meaning, a code which looks like 0####. All of these imported codes in this notebook are imported as integers, and not as character strings. When the codes with leading zeros are imported as integers, the leading zeros get dropped. Without these leading zeros, the codes will not function correctly for joining tables. Therefore, we need to convert these codes back to strings and ensure any dropped leading zeros are reinserted.  
+
+The codes that need to be adjusted are:
+* Customer Zip
+* Seller Zip
+* Geo Location Zip
+* Municipal code (From Brazilian Population Data)
+
+First we develop a function that takes a dataframe and column name. 
+
+### Function 
+```{r}
+fun_pad_zero <- function(df, col_name){
+  
+  col_name = enquo(col_name)
+  
+  # Determine Max Code Length
+  max_len <-df %>% 
+  mutate(!!quo_name(col_name) := as.character(!!col_name), 
+         code_len = str_length(!!col_name)) %>%
+  summarise(max = max(code_len)) %>%
+  as.integer()
+
+  # Pad Zeros
+  df <- df %>% 
+    mutate(!!quo_name(col_name) := str_pad(string = !!col_name,
+                                           width = max_len, 
+                                           side = "left", 
+                                           pad = 0))
+  
+  return(df)
+}
+```
+
+### Convert
+With the function defined we can convert the required columns.
+```{r echo=FALSE, results='hide'}
+df_geo_loc<- fun_pad_zero(df = df_geo_loc,
+             col_name = geolocation_zip_code_prefix)
+
+df_cust<- fun_pad_zero(df = df_cust,
+             col_name = customer_zip_code_prefix)
+
+df_sellers<- fun_pad_zero(df = df_sellers,
+             col_name = seller_zip_code_prefix)
+
+df_brazil_pop<- fun_pad_zero(df = df_brazil_pop,
+             col_name = cod_munic)
+```
+
+Evaluate zero padding worked.
+```{r}
+#df_geo_loc %>% glimpse()
+#df_cust %>% glimpse()
+#df_sellers %>% glimpse()
+#df_brazil_pop %>% glimpse()
+```
+
+## Convert Population State Code to Character
+The **cod_uf** variable in the Brazil population dataframe functions like a character variable. To correctly use it, we need to convert it to character.
+```{r}
+df_brazil_pop <- df_brazil_pop %>% 
+  mutate(cod_uf = as.character(cod_uf))
+
+df_brazil_pop %>% glimpse()
+```
+
+### Customer Zip
+```{r}
+df_cust<- fun_pad_zero(df = df_cust,
+             col_name = customer_zip_code_prefix)
+
+df_cust %>% glimpse()
+```
+
+# Summary Statistics
+### Purchases Per Customer
+```{r}
+df_orders %>% 
+  left_join(df_cust, by = "customer_id") %>% 
+  group_by(customer_unique_id) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count)) %>% 
+  mutate(min = min(count), 
+         mean = median(count),
+         max = max(count)) %>% 
+  select(min:max) %>% 
+  distinct()
+```
+
+### Price per Order
+```{r}
+df_order_pay %>% 
+  filter(payment_value < 1)
+
+df_order_pay %>% 
+  filter(payment_value != 0) %>% 
+  mutate(min = min(payment_value), 
+         mean = round(mean(payment_value),0),
+         max = round(max(payment_value),0)) %>% 
+  select(min:max) %>% 
+  distinct()
+
+```
+
+### Delivery Days
+```{r}
+days_to_deliver_per_order <- df_orders %>% 
+  filter(order_status == "delivered") %>% 
+  mutate(days_to_deliver = difftime((order_delivered_customer_date),
+                                    (order_purchase_timestamp),
+                                     units = "mins"),
+         days_to_deliver = round(as.numeric(days_to_deliver)/(24*60),1)) %>% 
+  select(order_id, days_to_deliver) %>% 
+  drop_na() %>% 
+  distinct()
+
+days_to_deliver_per_order %>% 
+  mutate(min = min(days_to_deliver), 
+           mean = round(mean(days_to_deliver),0),
+           max = round(max(days_to_deliver),0)) %>% 
+    select(min:max) %>% 
+    distinct()
+
+```
+
+
+```{r}
+days_to_deliver_per_order %>% 
+  ggplot(mapping = aes(x = days_to_deliver)) + 
+  geom_histogram(bins = 50)
+```
+
+
+# New and Return Customers Over Time
+To determine how many new customers were added each month, and how many customers became return customers each month, we first need to break down the year and month for each order.
+```{r}
+df_customer_order_date <- df_orders %>% 
+  left_join(df_cust, by = "customer_id") %>% 
+  select(order_id, customer_unique_id, order_purchase_timestamp) %>% 
+  mutate(year = year(order_purchase_timestamp),
+         month = month(order_purchase_timestamp)) %>% 
+  arrange((order_purchase_timestamp))
+
+df_customer_order_date
+```
+
+Then we will find the first order for each customer. And the second. We don't care about any further purchases.
+```{r}
+
+cumm_cust <- function(df, n){
+ df_customers_added <- df %>% 
+   group_by(customer_unique_id) %>% 
+   arrange(order_purchase_timestamp) %>% 
+   slice(n) %>% 
+   ungroup() %>% 
+   group_by(year, month) %>% 
+   summarise(customers = n()) %>% 
+   ungroup() %>%
+   mutate(customers = replace_na(customers,0)) %>% 
+   arrange(year, month) %>% 
+   mutate(customers_cumm = cumsum(customers)) %>% 
+   select(-customers)
+ 
+ return(df_customers_added)
+}
+
+
+df_new_customers_cumm <- cumm_cust(df_customer_order_date, 1) %>% 
+  rename(new = customers_cumm)
+
+df_return_customers_cumm <- cumm_cust(df_customer_order_date, 2) %>% 
+  rename(return = customers_cumm)
+
+df_customers_cumm <- df_new_customers_cumm %>% 
+  left_join(df_return_customers_cumm, by = c("year", "month"))
+
+df_customer_add <- df_customers_cumm %>%
+  add_row(year = 2016, month = 11, new = NA) %>% 
+  arrange(year, month) %>% 
+  fill(new, .direction = "up") %>% 
+  fill(return, .direction = "up") %>% 
+  pivot_longer(cols = new:return,
+              names_to = "customer_type", values_to = "customer_cumm") %>% 
+  mutate(ymd_date = ymd(paste0(year,"-",month,"-01"))) %>% 
+  select(ymd_date, everything())
+
+#df_customer_add %>% glimpse()
+
+df_customer_add %>% tail(2)
+```
+
+```{r}
+df_customer_add %>% tail()
+```
+
+
+```{r}
+color_pal <- c( 
+          "new" = color_dark_grey, 
+          "return" =  color_olist_blue
+          )
+
+alpha_setting <- 0.75
+
+alpha_pal <- c("new" = 1,"return" =  alpha_setting)
+
+customer_type_list = c("New", "Return")
+
+theme_line <- function(){
+  theme_classic() +
+  theme(
+    plot.caption = element_text(size = 20, 
+                            color = color_dark_grey, 
+                            ),
+    axis.text.x = element_text(size = 20, 
+                           face = "bold", 
+                           color = color_dark_grey),
+    axis.text.y = element_text(size = 30, 
+                           face = "bold",
+                           color = color_dark_grey),
+    axis.title.y = element_text(size = 45, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.95),
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(1,1,1,1) , "cm"),
+    legend.position = "none"
+  )  
+}
+
+p_cust_cumm <- ggplot(data = df_customer_add %>% filter(ymd_date < ymd("2018-09-01")),
+       mapping = aes(x = ymd_date, 
+                     y = customer_cumm, 
+                     color = customer_type,
+                     alpha = customer_type)) +
+  geom_line(size = 2.5) +
+  geom_text(
+    df_customer_add %>% tail(2),
+    mapping = aes(
+      label = customer_type_list,
+      x = ymd_date,
+      y = customer_cumm
+      ),
+    nudge_x = 9,
+    hjust = "left",
+    size = 11,
+    fontface = "bold"
+  ) +
+  scale_color_manual(values = color_pal) +
+  scale_alpha_manual(values = alpha_pal) +
+  scale_y_continuous(
+    breaks = seq(2.5e4,10e4, 2.5e4), 
+    limits = c(0,1.05e5),
+    labels = comma
+    ) +
+  scale_x_date(
+    labels = date_format("%y-%b"),
+    breaks = "4 month",
+    limits = as.Date(c("2016-08-01","2018-11-01"))
+      ) +
+  coord_cartesian(
+     clip = "off",
+     xlim = as.Date(c("2016-08-01","2018-12-01"),)
+  ) +
+  xlab(
+    label = ""
+    ) +
+  ylab(
+    label = "Customers"
+    ) +
+  labs(caption = "Source: Kaggle"
+  ) +
+  theme_line()
+
+p_cust_cumm
+
+ggsave(filename = "customer_growth.png", plot = p_cust_cumm, path = "./output_imgs/", width = 16, height = 8)
+```
+
+
+
+# Bar Charts
+The following section create some charts and visuals for the presentation.
+## Total Sales by Product Category
+There are 71 number of unique categories. 
+```{r}
+df_products_translate %>% 
+  select(product_category_recode) %>% 
+  describe()
+```
+
+This is an unwieldy number of unique categories. Lets see what the frequency of each category being used is by sale. Maybe we can drop some. Otherwise, maybe we can group them.
+```{r}
+category_by_sales <- df_order_items %>% 
+  left_join(df_products_translate, by = "product_id") %>% 
+  select(product_id, price, product_category_recode) %>% 
+  group_by(product_category_recode) %>% 
+  summarise(total_sales = sum(price)) %>% 
+  ungroup() %>% 
+  arrange(desc(total_sales)) %>% 
+  mutate(percent_total = round((total_sales/sum(total_sales) * 100),2))
+
+category_by_sales
+```
+
+### Create Dataframe for Plotting 
+```{r}
+df_category_by_sales_plot <- category_by_sales %>% 
+  mutate(product_category_recode = str_replace_all(string = product_category_recode, 
+                                                 pattern = "_", 
+                                                 replacement = " "), 
+         product_category_recode = str_to_title(product_category_recode),
+         product_category_recode = reorder(product_category_recode,percent_total),
+         percent_total = round(percent_total/100, 3))
+
+df_category_by_sales_plot
+```
+
+## Top 10 Products
+We want to see what the highest selling items were, and what category they fall into.
+```{r}
+df_product_by_sales_plot<- df_order_items %>% 
+  group_by(product_id) %>% 
+  summarise(total_sales = sum(price)) %>% 
+  ungroup() %>% 
+  arrange(desc(total_sales)) %>% 
+  mutate(percent_total = round((total_sales/sum(total_sales)*100),2)) %>% 
+  left_join(df_products_translate %>% 
+              select(product_id, product_category_recode), 
+            by = "product_id") 
+
+df_product_by_sales_plot <- df_product_by_sales_plot %>% 
+    mutate(product_category_recode = str_replace_all(string = product_category_recode, 
+                                                 pattern = "_", 
+                                                 replacement = " "), 
+         product_category_recode = str_to_title(product_category_recode),
+         product_id = reorder(product_id,percent_total),
+         percent_total = round(percent_total/100, 4)
+    )
+
+df_product_by_sales_plot
+```
+
+## Sales by State - Raw
+We will now see what states spend the most.
+```{r}
+df_total_sales_states <- df_order_pay %>% 
+  left_join(df_orders, "order_id") %>% 
+  left_join(df_cust, "customer_id") %>% 
+  select(payment_value, customer_state) %>% 
+  group_by(customer_state) %>% 
+  summarise(total_sales = sum(payment_value)) %>% 
+  arrange(desc(total_sales)) %>% 
+  mutate(total_sales_percent = round((total_sales/sum(total_sales) * 100),1))
+
+df_total_sales_states
+```
+
+## Sales by State - Population Raw
+I now want to see what state spends the most per person.
+
+State Population projections from the Brazilian Institute of Geography and Statistics were found here [https://www.ibge.gov.br/en/statistics/social/population/18448-estimates-of-resident-population-for-municipalities-and-federation-units.html?=&t=resultados](https://www.ibge.gov.br/en/statistics/social/population/18448-estimates-of-resident-population-for-municipalities-and-federation-units.html?=&t=resultados). 
+
+I will use these projections to calculate sales per population. First, I need to translate Brazil's population data from to the state level. The population data imported was documented at the municipal district level.
+
+```{r}
+df_brazil_pop_state <- df_brazil_pop %>% 
+  group_by(uf) %>%
+  summarise(pop_estimate = sum(populacao_estimada))
+```
+
+Now we join the state population data to the state sales data. Then we calculate money spent per 1K people.
+```{r}
+# Create State Name List
+df_state_name_list <- sf_br_state %>% 
+  data.frame() %>% 
+  select(abbrev_state,name_state) %>% 
+  distinct() %>% 
+  mutate_all(.funs = list(char = as.character))
+
+df_sales_by_state <- df_total_sales_states %>% 
+  left_join(df_brazil_pop_state, by = c("customer_state" = "uf")) %>% 
+  mutate(sales_per_k = round(1000*total_sales / pop_estimate,1)) %>% 
+  arrange(desc(sales_per_k)) %>% 
+  left_join(df_state_name_list %>% select(abbrev_state_char, name_state_char), 
+            by = c( "customer_state"="abbrev_state_char"))
+
+df_sales_by_state %>% glimpse()
+```
+
+Nothing generally unexpected here. At first glance, the more prosperous states spend more per person. Note, DF is the Federal District aka Brasilia. So while small (2.2% total sales), it is the capital.
+
+## Themes
+```{r}
+theme_bar_cat <- function(){
+  theme_classic() +
+  theme(
+    plot.caption = element_text(size = 20, 
+                            color = color_dark_grey, 
+                            ),
+    axis.text.x = element_text(size = 30, 
+                           face = "bold", 
+                           color = color_dark_grey),
+    axis.text.y = element_text(size = 30, 
+                           face = "bold",
+                           color = color_dark_grey),
+    axis.title.x = element_text(size = 35,  
+                           face = "bold",
+                           color = color_dark_grey,
+                           hjust = 0.03),
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(1,1,1,1) , "cm")
+  )  
+}
+
+theme_bar_prod <- function(){
+  theme_classic() +
+  theme(
+    plot.caption = element_text(size = 20, 
+                            color = color_dark_grey, 
+                            ),
+    axis.text.x = element_text(size = 30, 
+                           face = "bold", 
+                           color = color_dark_grey),
+    axis.text.y = element_text(size = 30, 
+                           face = "bold",
+                           color = color_dark_grey),
+    axis.title.x = element_text(size = 35,  
+                           face = "bold",
+                           color = color_dark_grey,
+                           hjust = 0.03),
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(1,7.5,1,1) , "cm")
+  )  
+}
+```
+
+
+## Bar - Top Product Categories
+```{r}
+p_percent_sales_by_cat <- ggplot(data = df_category_by_sales_plot %>% head(10),
+       mapping = aes(x = product_category_recode, y = percent_total)) +
+  geom_col(fill = color_olist_blue, 
+           width = 0.75,
+           alpha = 0.9) +
+  geom_text(
+    aes(x = product_category_recode,
+        y = percent_total,
+        label = paste0(round(percent_total*100,1),"%"),
+        fontface = "bold"),
+    size = 10,
+    color = color_olist_grey,
+    hjust = 1,
+    nudge_y = -0.0005
+    ) +
+  scale_y_continuous(
+    breaks = seq(0,0.1,0.05), 
+    limits = c(0,0.1),
+    labels = scales::percent_format(accuracy = 1)
+    ) +
+  xlab(
+    label = ""
+    ) +
+  ylab(
+    label = "Percent of Total Sales"
+    ) +
+  labs(caption = "Source: Kaggle"
+  ) +
+  coord_flip() + 
+  theme_bar_cat()
+
+p_percent_sales_by_cat
+
+ggsave(filename = "percent_sales_by_category.png", plot = p_percent_sales_by_cat, path = "./output_imgs/", width = 16, height = 8)
+```
+
+## Bar - Top Products
+```{r}
+#df_product_by_sales_plot %>% head(10)
+
+p_percent_sales_by_prod <- ggplot(data = df_product_by_sales_plot %>% head(10),
+       mapping = aes(x = product_id, y = percent_total)) +
+  geom_col(fill = color_olist_blue, 
+           width = 0.75,
+           alpha = 0.9) +
+  geom_text(
+    aes(x = product_id,
+        y = percent_total,
+        label = paste0(sprintf("%0.2f", round(percent_total*100,2)),"%"),
+        fontface = "bold"),
+    size = 10,
+    color = color_olist_grey,
+    hjust = 1,
+    nudge_y = -1e-5
+    ) +
+  geom_text(
+    aes(x = product_id,
+        label = paste0("(",product_category_recode,")"),
+        fontface = "bold"),
+    y = 0.005,
+    size = 10,
+    color = color_dark_grey,
+    hjust = 0,
+    nudge_y = 1e-4
+    ) +
+  scale_y_continuous(
+    breaks = seq(0,0.005,0.0025), 
+    limits = c(0,0.005), 
+    labels = label_percent()
+    ) +
+  xlab(
+    label = ""
+    ) +
+  ylab(
+    label = "Percent of Total Sales"
+    ) +
+  labs(caption = "Source: Kaggle"
+  ) +
+  coord_flip(clip = "off") + 
+  theme_bar_prod()
+
+p_percent_sales_by_prod
+
+ggsave(filename = "percent_sales_by_product.png", plot = p_percent_sales_by_prod, path = "./output_imgs/", width = 16, height = 8)
+```
+
+## Scatter- Pop vs Sales
+```{r}
+df_sales_by_state %>% glimpse()
+
+df_sales_by_state %>% glimpse()
+
+lm.pop_sales <- lm(formula = total_sales ~ pop_estimate, data =  df_sales_by_state)
+
+summary(lm.pop_sales)
+
+glance(lm.pop_sales)
+```
+
+```{r}
+plot(lm.pop_sales, which = 1)  
+```
+
+
+```{r}
+plot(lm.pop_sales, which = 2)
+```
+
+```{r}
+df_sales_by_state <- df_sales_by_state %>% 
+  mutate(color_code = case_when(customer_state == "SP" ~ "high",
+                           customer_state == "BA" ~ "low",
+                           TRUE ~ "other"))
+
+color_olist_blue <- "#0c29d0"
+color_olist_highlight_comp <- "#d0510c"
+color_olist_highlight = "#FBBC04"
+color_olist_grey <-"#F7F9F9"
+color_dark_grey <- "#7f7f7f"
+color_shape_fill <- "#D0D3D4"
+
+color_pal <- c("high" = color_olist_blue,
+               "low" = color_olist_highlight_comp,
+               "other" = color_dark_grey)
+
+alpha_pal <- c("high" = 1,
+               "low" = 1,
+               "other" = 0.75)
+
+theme_scatter <- function(){
+  theme_classic() +
+  theme(
+    plot.caption = element_text(size = 20, 
+                            color = color_dark_grey, 
+                            ),
+    axis.text.x = element_text(size = 30, 
+                           face = "bold", 
+                           color = color_dark_grey),
+    axis.text.y = element_text(size = 30, 
+                           face = "bold",
+                           color = color_dark_grey),
+    axis.title.x = element_text(size = 45, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.05),
+    axis.title.y = element_text(size = 45, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.975),
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(1,1,1,1) , "cm"),
+    legend.position = "none"
+  )  
+}
+
+highlight_states <- c("SP","BA")
+
+p_state_sales <- ggplot(data = df_sales_by_state,
+                        mapping = aes(x = pop_estimate/1e6, 
+                                      y = total_sales/1e6)) +
+ geom_point(aes(color = color_code, 
+                alpha = color_code), 
+            fill = color_olist_grey, 
+            size = 8, 
+            shape = 21,
+            stroke = 4) +
+ geom_smooth(method = "lm",  
+             se = FALSE, 
+             linetype = "dashed", 
+             size = 3,
+             color = color_dark_grey, 
+             formula = 'y ~ x') + 
+ geom_text(data = df_sales_by_state %>% filter(customer_state == "SP"),
+    aes(x = pop_estimate/1e6,
+        y = total_sales/1e6,
+        label = name_state_char,
+        color = color_code),
+    fontface = "bold",
+    size = 16,
+    nudge_x = -1.5,
+    hjust = 1
+    ) +
+ geom_text(data = df_sales_by_state %>% filter(customer_state == "BA"),
+    aes(x = pop_estimate/1e6,
+        y = total_sales/1e6,
+        label = name_state_char,
+        color = color_code),
+    fontface = "bold",
+    size = 16,
+    nudge_x = 1.5,
+    hjust = 0
+    ) +
+  scale_color_manual(values = color_pal) +
+  scale_alpha_manual(values = alpha_pal) +
+  scale_x_continuous(
+    breaks = seq(10, 40, 10),
+    labels =  unit_format(unit = "M")
+    ) +
+  scale_y_continuous(
+    breaks = as.integer(seq(2, 6, 2)),
+    labels =  unit_format(unit = "M", accuracy = 1),
+    ) +
+  xlab(
+    label = "Population"
+    ) +
+  ylab(
+    label = "Sales ($R)"
+    ) +
+  labs(caption = "Source: Kaggle"
+  ) +
+  theme_scatter()
+
+p_state_sales
+
+ggsave(filename = "sales_vs_population.png", plot = p_state_sales, path = "./output_imgs/", width = 16, height = 8)
+```
+
+
+```{r}
+df_sales_by_state %>% filter(customer_state == "SP")
+```
+
+## Heatmap of Sales in Brazil
+### Data Development
+As part of the potential geographic analysis of the data, I want to determine the shipping distance for each order (direct point to point). To do this, I need to first develop a dataframe with the order_id, customer_id, and seller_id. I will also include the time of the order incase I want to do time lapse analysis in the future.
+```{r}
+df_geo_analysis_1 <- df_order_items %>% 
+  select(order_id, seller_id) %>%
+  left_join(df_orders %>% 
+              select(order_id, customer_id, order_purchase_timestamp),
+            by ="order_id")
+```
+
+With this data I can then join the customer and seller tables to the new dataframe to determine the zip codes of each. I'll also keep the city and state information for each customer, just in case.
+```{r}
+# Join Customer Data
+df_geo_analysis_2 <-  df_geo_analysis_1 %>% 
+  left_join(df_cust %>% 
+              select(customer_id, customer_zip_code_prefix, 
+                     customer_city ,customer_state),
+            by = "customer_id")
+
+# Join Seller Data
+df_geo_analysis_3 <- df_geo_analysis_2 %>% 
+  left_join(df_sellers, by = "seller_id")
+
+df_geo_analysis_3 %>% glimpse()
+```
+
+Now, with the customer and seller geographical location data associated with each order, we join the geographic data table to get the latitude and longitude for each person.
+
+One issue that we need to deal with first, is that there are mulitple lat/lon values provided for each zip code. To make things simpler, and to be able to calculate distances from customer to seller, we need to determine a single lat/lon value for every zip code. To do this, we will take the average of the latitude and longitude values for each zip. 
+First we need to filter out any erronious our outlier zip codes. Based on this post 
+[https://worldpopulationreview.com/country-locations/where-is-brazil/](https://worldpopulationreview.com/country-locations/where-is-brazil/), the following are the latitude and longitude extremes of Brazil.
+
+```{r}
+# Northen Extreme
+lat_n <- 5.25
+
+# Southen Extreme
+lat_s <- -33.75
+
+# Eastern Extreme
+lng_e <- -28.873889
+
+# WEstern Extreme
+lng_w <- -73.984444
+```
+
+To ensure the latitude and longitude values we are working with are within these bounds, we need to filter the data.Then, we calculate the average of each zip code. 
+```{r}
+df_geo_loc_avg <- df_geo_loc %>% 
+  filter(between(x = geolocation_lat, left = lat_s, right = lat_n),
+         between(x = geolocation_lng, left = lng_w, right = lng_e)
+         ) %>% 
+  group_by(geolocation_zip_code_prefix) %>% 
+  summarise(geolocation_lat_avg = mean(geolocation_lat),
+            geolocation_lng_avg = mean(geolocation_lng)) %>% 
+  ungroup()
+```
+
+With a single lat/lon value for each zip code we can join this table to generate the lat/lon coordinates for the seller and customer on each order.
+```{r}
+# Join Customer Latitude / Longitude
+df_geo_analysis_4 <-  df_geo_analysis_3 %>% 
+  left_join(df_geo_loc_avg,
+            by = c("customer_zip_code_prefix" = "geolocation_zip_code_prefix")) %>%  
+  rename(lat_customer = geolocation_lat_avg,
+         lng_customer = geolocation_lng_avg)
+
+# Join Seller Latitude / Longitude
+df_geo_analysis_5 <-  df_geo_analysis_4 %>% 
+  left_join(df_geo_loc_avg,
+            by = c("seller_zip_code_prefix" = "geolocation_zip_code_prefix")) %>%  
+  rename(lat_seller = geolocation_lat_avg,
+         lng_seller = geolocation_lng_avg)
+
+df_geo_analysis_5 %>% glimpse()
+```
+
+```{r}
+df_geo_analysis_6 <- df_geo_analysis_5 %>% 
+select(order_id, customer_id, seller_id, order_purchase_timestamp, 
+       customer_city, customer_state, customer_zip_code_prefix, lat_customer, lng_customer,
+       seller_city, seller_state, seller_zip_code_prefix, lat_seller, lng_seller)
+
+df_geo_analysis_6 %>% glimpse()
+```
+
+
+With our lat/lon coordinates in place, we can now start calculating the distance between each customer/seller pair on each order. The **distHaversine** function returns distance in meters, as a default. I have converted those distances to km.
+
+```{r}
+# Mapped Function
+f <- function(a, b, c, d) distm(x = c(a,b), y = c(c,d), fun = distHaversine)
+
+df_geo_analysis_6 <- df_geo_analysis_5 %>% 
+  mutate(
+    dist_km = pmap_dbl(.l = list(lat_customer, lng_customer, lat_seller, lng_seller), 
+                    .f = f
+                    ) * 1e-3
+  )
+
+df_geo_analysis_6 %>% glimpse()
+```
+
+### Shapefile Inspection
+```{r}
+sf_br_state %>% glimpse()
+```
+
+
+```{r}
+
+#df_geo_analysis_6 %>% glimpse()
+
+no_axis_theme <- theme(axis.title=element_blank(),
+                 axis.text=element_blank(),
+                 axis.ticks=element_blank(),
+                 legend.position = "none")
+
+p_brazil_map <- ggplot() +
+  geom_sf(data = sf_br_state, 
+          fill="#2D3E50", 
+          color="#FEBF57", 
+          size=0.15, 
+          show.legend = FALSE) +
+  geom_point(data = df_geo_analysis_6 %>% drop_na(),
+             mapping = aes(x = lng_customer, y = lat_customer, 
+                           color = customer_state, alpha =  dist_km ),  
+             alpha = 0.5)+
+  theme_minimal() +
+  no_axis_theme
+
+p_brazil_map
+```
+

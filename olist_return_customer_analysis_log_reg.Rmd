@@ -438,7 +438,7 @@ glance(model)
 ```
 
 ```{r}
-#summary(model)
+summary(model)
 ```
 
 ```{r}

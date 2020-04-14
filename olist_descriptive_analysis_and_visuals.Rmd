@@ -25,6 +25,7 @@ p_load(
   scales, 
   skimr, 
   tidyverse,
+  viridis,
   zoo
 )
 ```
@@ -44,6 +45,7 @@ df_translation <- read.csv(file = "data/product_category_name_translation.csv", 
 
 # Brazillian Population Data
 df_brazil_pop <- read.csv(file = "data/population_estimates_dou_2019.csv", stringsAsFactors = FALSE)
+df_brazil_region <- read.csv(file = "data/brazil_region_translation.csv", stringsAsFactors = FALSE)
 
 # Recode Categories
 df_category_recode = read.csv(file = "data/category_grouping_active.csv", stringsAsFactors = FALSE)
@@ -52,6 +54,8 @@ df_category_recode = read.csv(file = "data/category_grouping_active.csv", string
 y <- 2018
 sf_br_state <- read_state(code_state="all", year=y)
 ```
+
+
 
 ## Color Definitions
 ```{r}
@@ -333,7 +337,7 @@ Evaluate zero padding worked.
 #df_geo_loc %>% glimpse()
 #df_cust %>% glimpse()
 #df_sellers %>% glimpse()
-#df_brazil_pop %>% glimpse()
+df_brazil_pop %>% glimpse()
 ```
 
 ## Convert Population State Code to Character
@@ -493,7 +497,7 @@ theme_line <- function(){
     plot.caption = element_text(size = 20, 
                             color = color_dark_grey, 
                             ),
-    axis.text.x = element_text(size = 20, 
+    axis.text.x = element_text(size = 25, 
                            face = "bold", 
                            color = color_dark_grey),
     axis.text.y = element_text(size = 30, 
@@ -504,7 +508,7 @@ theme_line <- function(){
                        color = color_dark_grey,
                        hjust = 0.95),
     axis.ticks = element_blank(),
-    plot.margin = unit(c(1,1,1,1) , "cm"),
+    plot.margin = unit(c(1,4,1,1) , "cm"),
     legend.position = "none"
   )  
 }
@@ -519,12 +523,12 @@ p_cust_cumm <- ggplot(data = df_customer_add %>% filter(ymd_date < ymd("2018-09-
     df_customer_add %>% tail(2),
     mapping = aes(
       label = customer_type_list,
-      x = ymd_date,
+      x = ymd_date - 60,
       y = customer_cumm
       ),
     nudge_x = 9,
     hjust = "left",
-    size = 11,
+    size = 16,
     fontface = "bold"
   ) +
   scale_color_manual(values = color_pal) +
@@ -540,8 +544,8 @@ p_cust_cumm <- ggplot(data = df_customer_add %>% filter(ymd_date < ymd("2018-09-
     limits = as.Date(c("2016-08-01","2018-11-01"))
       ) +
   coord_cartesian(
-     clip = "off",
-     xlim = as.Date(c("2016-08-01","2018-12-01"),)
+     clip = "off"
+     #xlim = as.Date(c("2016-08-01","2018-12-01"))
   ) +
   xlab(
     label = ""
@@ -646,21 +650,27 @@ I will use these projections to calculate sales per population. First, I need to
 
 ```{r}
 df_brazil_pop_state <- df_brazil_pop %>% 
-  group_by(uf) %>%
+  group_by(st_abb) %>%
   summarise(pop_estimate = sum(populacao_estimada))
+
+df_brazil_pop_state %>% glimpse()
 ```
 
 Now we join the state population data to the state sales data. Then we calculate money spent per 1K people.
 ```{r}
+df_brazil_pop_state %>% glimpse()
+
+df_total_sales_states %>% glimpse()
+
 # Create State Name List
 df_state_name_list <- sf_br_state %>% 
   data.frame() %>% 
-  select(abbrev_state,name_state) %>% 
+  select(abbrev_state,name_state, name_region) %>% 
   distinct() %>% 
   mutate_all(.funs = list(char = as.character))
 
 df_sales_by_state <- df_total_sales_states %>% 
-  left_join(df_brazil_pop_state, by = c("customer_state" = "uf")) %>% 
+  left_join(df_brazil_pop_state, by = c("customer_state" = "st_abb")) %>% 
   mutate(sales_per_k = round(1000*total_sales / pop_estimate,1)) %>% 
   arrange(desc(sales_per_k)) %>% 
   left_join(df_state_name_list %>% select(abbrev_state_char, name_state_char), 
@@ -807,8 +817,6 @@ ggsave(filename = "percent_sales_by_product.png", plot = p_percent_sales_by_prod
 
 ## Scatter- Pop vs Sales
 ```{r}
-df_sales_by_state %>% glimpse()
-
 df_sales_by_state %>% glimpse()
 
 lm.pop_sales <- lm(formula = total_sales ~ pop_estimate, data =  df_sales_by_state)
@@ -1074,5 +1082,231 @@ p_brazil_map <- ggplot() +
   no_axis_theme
 
 p_brazil_map
+```
+
+# Review Score by Order Count
+```{r}
+df_order_vs_review %>% select(total_orders) %>% describe()
+
+df_order_vs_review <- df_order_items %>% 
+  group_by(order_id) %>%
+  summarise(order_count = max(order_item_id)) %>% 
+  ungroup() %>% 
+  left_join(df_order_review, by = "order_id") %>% 
+  group_by(order_count) %>% 
+  mutate(total_orders = n()) %>% 
+  ungroup() %>% 
+  group_by(order_count, review_score) %>% 
+  mutate(freq = n()/total_orders) %>% 
+  ungroup() %>% 
+  select(order_count, review_score, freq) %>% 
+  distinct() %>%  
+  arrange(order_count, desc(review_score)) %>%
+  mutate(review_name = case_when(review_score == 5 ~ "Five",
+                                 review_score == 4 ~ "Four",
+                                 review_score == 3 ~ "Three",
+                                 review_score == 2 ~ "Two",
+                                 review_score == 1 ~ "One")
+         ) %>% 
+  mutate(review_score = as.factor(review_score)) %>% 
+  filter(order_count <= 12)
+```
+
+```{r}
+df_order_vs_review %>% 
+  select(order_count, review_score, total_orders) %>% 
+  distinct() %>% 
+  arrange(review_score,order_count)
+```
+
+
+```{r}
+color_olist_blue <- "#0c29d0"
+color_olist_highlight_comp <- "#d0510c"
+color_olist_highlight = "#FBBC04"
+color_olist_grey <-"#F7F9F9"
+color_dark_grey <- "#7f7f7f"
+
+color_pal = c("Five" = color_olist_blue,
+              "Four" = color_dark_grey,
+              "Three" = color_dark_grey,
+              "Two" = color_dark_grey,
+              "One" = color_olist_highlight_comp)
+
+theme_review <- function(){
+  theme_classic() +
+  theme(
+    plot.caption = element_text(size = 20, 
+                            color = color_dark_grey, 
+                            ),
+    axis.text.x = element_text(size = 30, 
+                           face = "bold", 
+                           color = color_dark_grey),
+    axis.text.y = element_text(size = 30, 
+                           face = "bold",
+                           color = color_dark_grey),
+    axis.title.x = element_text(size = 45, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.05),
+    axis.title.y = element_text(size = 45, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.95),
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(1,1,1,1) , "cm"),
+    legend.position = "none"
+  )  
+}
+
+
+ggplot(data = df_order_vs_review,
+       mapping = aes(x = order_count,
+                     y = freq, 
+                     color= review_name)
+) +
+  geom_line(size = 3) + 
+  scale_color_manual(values = color_pal) +
+  scale_y_continuous(breaks = seq(0.2, 0.6, 0.2),
+                     labels = scales::percent_format(accuracy = 1)) +
+  scale_x_continuous(breaks = seq(3,12,3)) +
+  xlab(
+    label = " Number of Packages"
+    ) +
+  ylab(
+    label = "Frequency"
+    ) +
+  labs(caption = "Source: Kaggle"
+  ) +
+  theme_review()
+```
+
+# Shipping Freight
+```{r}
+df_sales_states_and_regions <- df_order_items %>% 
+  group_by(order_id) %>% 
+  summarise(freight = sum(freight_value)) %>% 
+  left_join(df_order_items %>% select(order_id, seller_id),
+            by = "order_id") %>% 
+  left_join(df_sellers %>% select(seller_id, seller_state), by = "seller_id") %>% 
+  left_join(df_state_name_list %>% select(abbrev_state_char, name_state_char, name_region_char),
+            by = c("seller_state" = "abbrev_state_char")) %>% 
+  rename(seller_state_abb = seller_state,
+         seller_state_name = name_state_char, 
+         seller_region = name_region_char) %>% 
+  left_join(df_orders %>% select(order_id, customer_id), 
+            by = "order_id") %>% 
+  left_join(df_cust %>% select(customer_id, customer_state),
+            by = "customer_id") %>% 
+  left_join(df_state_name_list %>% select(abbrev_state_char, name_state_char, name_region_char),
+            by = c("customer_state" = "abbrev_state_char")) %>% 
+  rename(customer_state_abb = customer_state,
+         customer_state_name = name_state_char, 
+         customer_region = name_region_char) %>% 
+  left_join(df_brazil_region, by = c("seller_region" = "region_portuguese")) %>% 
+  select(-seller_region) %>% 
+  rename(seller_region = region_english ) %>% 
+  left_join(df_brazil_region, by = c("customer_region" = "region_portuguese")) %>% 
+  select(-customer_region) %>% 
+  rename(customer_region = region_english ) %>%
+  select(order_id, seller_id, customer_id, everything())
+```
+
+
+```{r}
+df_sales_states_and_regions %>% glimpse()
+```
+
+```{r}
+df_state_name_list %>% glimpse()
+
+df_seller_state_to_region <- df_sales_states_and_regions %>% 
+  group_by(seller_state_name, customer_region) %>% 
+  summarise(freight_avg = mean(freight)) %>% 
+  ungroup() %>% 
+  left_join(df_state_name_list %>% select(name_state_char, name_region_char),
+          by = c("seller_state_name" = "name_state_char")) %>%
+  left_join(df_brazil_region, by = c("name_region_char" = "region_portuguese")) %>% 
+  select(-name_region_char) %>% 
+  rename(seller_region = region_english) %>% 
+  mutate(seller_region_break = if_else(seller_region == "Central-West", "Central-\nWest",seller_region)) %>% 
+  mutate_if(.predicate = is.character,
+            .funs = list(fct = as.factor)) %>% 
+  select(freight_avg, customer_region_fct, seller_state_name_fct, seller_region_fct, seller_region_break_fct)
+
+df_seller_state_to_region %>% glimpse()
+```
+
+```{r}
+df_seller_state_to_region %>% glimpse()
+df_seller_state_to_region
+```
+
+
+```{r}
+theme_tile <- function(){
+  theme_classic() +
+  theme(
+    plot.caption = element_text(size = 20, 
+                            color = color_dark_grey, 
+                            ),
+    axis.text.x = element_text(size = 20, 
+                           face = "bold", 
+                           color = color_dark_grey),
+    axis.text.y = element_text(size = 15, 
+                           face = "bold",
+                           color = color_dark_grey),
+    axis.title.x = element_text(size = 35, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.05),
+    axis.title.y = element_text(size = 35, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       hjust = 0.975),
+    strip.text.y.left = element_text(size = 20, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       angle = 0),
+    strip.placement = "outside",
+    axis.ticks = element_blank(),
+    plot.margin = unit(c(1,0,0.5,0) , "cm"),
+    legend.title = element_text(size = 15, 
+                       face = "bold",
+                       color = color_dark_grey,
+                       vjust = 0.75),
+    legend.text = element_text(size = 15, 
+                       face = "bold",
+                       color = color_dark_grey),
+    legend.key.height = unit(1, "cm"),
+    legend.key.width = unit(2.5, "cm"),
+    legend.position = "bottom"
+  )  
+}
+
+p_freight_heatmap <- ggplot(data = df_seller_state_to_region,
+       mapping = aes(x = customer_region_fct,
+                     y = seller_state_name_fct)) +
+  geom_tile(aes(fill = freight_avg), color = "white", size = 1.5) +
+  scale_fill_viridis(direction = -1) +
+  facet_grid(seller_region_break_fct ~ ., 
+             space = "free_y",
+             scales = "free_y",
+             switch = "y") + 
+  xlab(
+    label = "Customer - Region"
+    ) +
+  ylab(
+    label = "Seller - Location"
+    ) +
+  labs(caption = "Source: Kaggle",
+       fill = "Freight Cost, Avg. ($R)"
+  ) +
+  theme_tile()
+
+p_freight_heatmap
+
+
+ggsave(filename = "freight_heat_map.png", plot = p_freight_heatmap, path = "./output_imgs/", width = 15, height = 8)
 ```
 
